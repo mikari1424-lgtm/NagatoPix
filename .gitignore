@@ -4,7 +4,7 @@
 
 # ---------- 本项目特有的运行时文件 ----------
 # 配置文件（含 RefreshToken，绝对不能提交）
-pixiv_client_config.json
+config.toml
 
 # 队列持久化（含未完成任务的下载记录）
 queue.json
