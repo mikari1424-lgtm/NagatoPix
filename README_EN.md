@@ -35,7 +35,6 @@ The official Pixiv client excels at **single-artwork browsing**, but is fundamen
 | Bulk download | One by one | Queue + 1–8 workers |
 | ExifTool metadata | None | Full support |
 | Queue persistence | None | Supported (resume after restart) |
-| Search settings | Basic | Scope / period / type / bookmarks |
 
 The core difference is not "more features" — it is **design philosophy**. The official client assumes *users want to view everything*. NagatoPix assumes *users want to browse metadata and download a few*. The former must hold images in memory; the latter only processes JSON metadata.
 
