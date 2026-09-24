@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>NagatoPix</title>
+    <link rel="icon" type="image/png" href="/static_icons/favicon.png">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <aside class="sidebar">
+        <div class="logo">
+            <span class="logo-mark">N</span>
+            <span class="logo-text">Nagato</span>
+        </div>
+        <nav>
+            <button data-tab="recommend"><span class="ico">✨</span><span data-i18n="nav_recommend"></span></button>
+            <button data-tab="follow"><span class="ico">👥</span><span data-i18n="nav_follow"></span></button>
+            <button data-tab="ranking"><span class="ico">🏆</span><span data-i18n="nav_ranking"></span></button>
+            <button data-tab="search"><span class="ico">🔍</span><span data-i18n="nav_search"></span></button>
+            <button data-tab="user-detail"><span class="ico">📋</span><span data-i18n="nav_user_detail"></span></button>
+            <button data-tab="download"><span class="ico">⬇️</span><span data-i18n="nav_download"></span></button>
+            <button data-tab="settings"><span class="ico">⚙️</span><span data-i18n="nav_settings"></span></button>
+        </nav>
+        <div class="sidebar-bottom">
+            <select id="lang-switcher" onchange="switchLanguage(this.value)">
+                <option value="zh-CN">简体中文</option>
+                <option value="en">English</option>
+            </select>
+            <div class="conn">
+                <span class="status-dot" id="conn-status"></span>
+                <span id="conn-text" data-i18n="connecting"></span>
+            </div>
+        </div>
+    </aside>
+
+    <main>
+        <!-- ============ Recommend ============ -->
+        <section class="tab sticky-results" id="tab-recommend">
+            <div class="panel controls">
+                <div class="row">
+                    <label data-i18n="rec_mode"></label>
+                    <button class="primary" onclick="doRecommend('auto')" id="btn-rec-auto"
+                        data-i18n="rec_auto"></button>
+                    <button class="secondary" onclick="doRecommend('queue')" data-i18n="rec_queue"></button>
+                    <button class="secondary" onclick="doRecommend('history')" data-i18n="rec_history"></button>
+                    <span class="status-text" id="recommend-status"></span>
+                </div>
+                <div class="row">
+                    <label data-i18n="rec_from_work"></label>
+                    <input type="number" id="recommend-pid" data-i18n-placeholder="rec_pid_ph" style="width:150px">
+                    <button class="secondary" onclick="doRecommend('work')" data-i18n="rec_similar"></button>
+                    <button class="secondary" onclick="openAdvancedRecommend()" data-i18n="rec_advanced"></button>
+                </div>
+            </div>
+            <div class="panel results-panel">
+                <div id="recommend-list"></div>
+            </div>
+        </section>
+
+        <!-- ============ Follow ============ -->
+        <section class="tab sticky-results" id="tab-follow">
+            <div class="panel controls">
+                <div class="row">
+                    <label data-i18n="follow_scope"></label>
+                    <select id="follow-restrict">
+                        <option value="all" data-i18n="follow_all"></option>
+                        <option value="public" data-i18n="follow_public"></option>
+                        <option value="private" data-i18n="follow_private"></option>
+                    </select>
+                    <button class="primary" onclick="loadFollowNew(0)" id="btn-load-follow"
+                        data-i18n="follow_load"></button>
+                    <span class="status-text" id="follow-status"></span>
+                </div>
+                <div class="row">
+                    <button class="secondary" onclick="followPrevPage()" data-i18n="btn_prev"></button>
+                    <button class="secondary" onclick="followNextPage()" data-i18n="btn_next"></button>
+                    <span id="follow-page-info" style="color:#808590; font-size:12px"></span>
+                </div>
+                <div class="row">
+                    <label data-i18n="label_filter"></label>
+                    <input type="text" id="follow-filter" data-i18n-placeholder="filter_ph"
+                        style="flex:1; max-width:400px" oninput="applyFollowFilter()">
+                    <button class="secondary" onclick="clearFollowFilter()" data-i18n="btn_clear"></button>
+                    <span class="status-text" id="follow-filter-status"></span>
+                </div>
+                <div class="cloud-section" id="cloud-follow-tags">
+                    <div class="cloud-header" onclick="toggleCloud('cloud-follow-tags')">
+                        <span data-i18n="label_tag_cloud"></span>
+                        <span class="cloud-toggle">▼</span>
+                    </div>
+                    <div class="tag-cloud" id="follow-tag-cloud"></div>
+                </div>
+                <div class="cloud-section" id="cloud-follow-authors">
+                    <div class="cloud-header" onclick="toggleCloud('cloud-follow-authors')">
+                        <span data-i18n="label_author_cloud"></span>
+                        <span class="cloud-toggle">▼</span>
+                    </div>
+                    <div class="tag-cloud" id="follow-author-cloud"></div>
+                </div>
+            </div>
+            <div class="panel results-panel">
+                <div id="follow-list"></div>
+            </div>
+        </section>
+
+        <!-- ============ Ranking ============ -->
+        <section class="tab sticky-results" id="tab-ranking">
+            <div class="panel controls">
+                <div class="row">
+                    <label data-i18n="ranking_type"></label>
+                    <select id="ranking-mode">
+                        <option value="day" data-i18n="ranking_day"></option>
+                        <option value="week" data-i18n="ranking_week"></option>
+                        <option value="month" data-i18n="ranking_month"></option>
+                        <option value="day_male" data-i18n="ranking_day_male"></option>
+                        <option value="day_female" data-i18n="ranking_day_female"></option>
+                        <option value="week_original" data-i18n="ranking_week_original"></option>
+                        <option value="week_rookie" data-i18n="ranking_week_rookie"></option>
+                        <option value="day_r18" data-i18n="ranking_day_r18"></option>
+                    </select>
+                    <button class="primary" onclick="fetchRanking()" id="btn-fetch-ranking"
+                        data-i18n="btn_fetch_ranking"></button>
+                    <span class="status-text" id="ranking-status"></span>
+                </div>
+                <div class="row">
+                    <label data-i18n="label_filter"></label>
+                    <input type="text" id="ranking-filter" data-i18n-placeholder="filter_ph"
+                        style="flex:1; max-width:400px" oninput="filterRankingByTags()">
+                    <button class="secondary" onclick="clearRankingFilter()" data-i18n="btn_clear"></button>
+                    <span class="status-text" id="ranking-filter-status"></span>
+                </div>
+                <div class="cloud-section" id="cloud-ranking">
+                    <div class="cloud-header" onclick="toggleCloud('cloud-ranking')">
+                        <span data-i18n="label_tag_cloud"></span>
+                        <span class="cloud-toggle">▼</span>
+                    </div>
+                    <div class="tag-cloud" id="ranking-tag-cloud"></div>
+                </div>
+            </div>
+            <div class="panel results-panel">
+                <div id="ranking-list"></div>
+            </div>
+        </section>
+
+        <!-- ============ Search ============ -->
+        <section class="tab sticky-results" id="tab-search">
+            <div class="panel controls">
+                <div class="row">
+                    <label data-i18n="search_mode"></label>
+                    <select id="search-mode" onchange="onSearchModeChange()">
+                        <option value="illust" data-i18n="search_mode_illust"></option>
+                        <option value="user" data-i18n="search_mode_user"></option>
+                    </select>
+                </div>
+
+                <!-- Illust search -->
+                <div id="search-pane-illust">
+                    <div class="row">
+                        <label data-i18n="search_tag"></label>
+                        <input type="text" id="search-tag" data-i18n-placeholder="search_tag_ph"
+                            style="flex:1; max-width:300px">
+                        <label data-i18n="search_sort"></label>
+                        <select id="search-sort">
+                            <option value="date_desc" data-i18n="sort_newest"></option>
+                            <option value="date_asc" data-i18n="sort_oldest"></option>
+                        </select>
+                    </div>
+                    <div class="row">
+                        <label data-i18n="search_page"></label>
+                        <input type="number" id="search-page" value="1" min="1" style="width:80px">
+                        <label data-i18n="search_pages"></label>
+                        <input type="number" id="search-pages" value="1" min="1" max="200" style="width:80px">
+                        <button class="primary" onclick="doSearch()" id="btn-search" data-i18n="btn_search"></button>
+                        <span class="status-text" id="search-status"></span>
+                    </div>
+
+                    <div class="cloud-section collapsed" id="cloud-search-advanced">
+                        <div class="cloud-header" onclick="toggleCloud('cloud-search-advanced')">
+                            <span data-i18n="search_advanced"></span>
+                            <span class="cloud-toggle">▼</span>
+                        </div>
+                        <div class="search-advanced-body">
+                            <div class="row">
+                                <label data-i18n="search_range"></label>
+                                <select id="search-target">
+                                    <option value="partial_match_for_tags" data-i18n="search_target_partial"></option>
+                                    <option value="exact_match_for_tags" selected data-i18n="search_target_exact">
+                                    </option>
+                                    <option value="title_and_caption" data-i18n="search_target_title_caption"></option>
+                                </select>
+                            </div>
+                            <div class="row">
+                                <label data-i18n="search_duration"></label>
+                                <select id="search-duration" onchange="onDurationChange()">
+                                    <option value="" data-i18n="duration_any"></option>
+                                    <option value="within_last_day" data-i18n="duration_day"></option>
+                                    <option value="within_last_week" data-i18n="duration_week"></option>
+                                    <option value="within_last_month" data-i18n="duration_month"></option>
+                                    <option value="custom" data-i18n="duration_custom"></option>
+                                </select>
+                            </div>
+                            <div class="row" id="search-custom-dates" style="display:none">
+                                <label data-i18n="search_date_from"></label>
+                                <input type="date" id="search-start-date" style="width:150px">
+                                <label data-i18n="search_date_to"></label>
+                                <input type="date" id="search-end-date" style="width:150px">
+                                <span class="hint-text" data-i18n="search_date_hint"></span>
+                            </div>
+                            <div class="row">
+                                <label data-i18n="search_type"></label>
+                                <label><input type="checkbox" id="search-type-illust" checked>
+                                    <span data-i18n="type_illust"></span></label>
+                                <label><input type="checkbox" id="search-type-manga" checked>
+                                    <span data-i18n="type_manga"></span></label>
+                                <span class="hint-text" data-i18n="search_type_hint"></span>
+                            </div>
+                            <div class="row">
+                                <label data-i18n="search_bookmarks"></label>
+                                <input type="number" id="search-bm-min" value="0" min="0" style="width:100px"
+                                    data-i18n-placeholder="search_bm_min_ph" oninput="applySearchBookmarkFilter()">
+                                <span style="color:#808590">~</span>
+                                <input type="number" id="search-bm-max" value="0" min="0" style="width:100px"
+                                    data-i18n-placeholder="search_bm_max_ph" oninput="applySearchBookmarkFilter()">
+
+                                <span class="hint-text" data-i18n="search_bookmarks_hint"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- User search -->
+                <div id="search-pane-user" style="display:none">
+                    <div class="row">
+                        <label data-i18n="usearch_word"></label>
+                        <input type="text" id="usearch-word" data-i18n-placeholder="usearch_ph"
+                            style="flex:1; max-width:300px">
+                        <label data-i18n="search_page"></label>
+                        <input type="number" id="usearch-page" value="1" min="1" style="width:80px">
+                        <button class="primary" onclick="doUserSearch()" id="btn-user-search"
+                            data-i18n="usearch_btn"></button>
+                        <span class="status-text" id="usearch-status"></span>
+                    </div>
+                </div>
+            </div>
+            <div class="panel results-panel">
+                <div id="search-list"></div>
+            </div>
+        </section>
+
+        <!-- ============ User Detail ============ -->
+        <section class="tab sticky-results" id="tab-user-detail">
+            <div class="panel controls">
+                <div class="row">
+                    <label data-i18n="udetail_uid"></label>
+                    <input type="number" id="udetail-uid" data-i18n-placeholder="udetail_uid_ph" style="width:150px">
+                    <button class="primary" id="btn-load-udetail" onclick="loadUserDetailFromInput()"
+                        data-i18n="udetail_load"></button>
+                    <span class="status-text" id="udetail-status"></span>
+                </div>
+                <div id="udetail-header" style="margin-top:8px"></div>
+                <div class="row" style="margin-top:8px">
+                    <label data-i18n="label_filter"></label>
+                    <input type="text" id="udetail-filter" data-i18n-placeholder="filter_ph"
+                        style="flex:1; max-width:400px" oninput="applyUserDetailFilter()">
+                    <button class="secondary" onclick="clearUserDetailFilter()" data-i18n="btn_clear"></button>
+                    <span class="status-text" id="udetail-filter-status"></span>
+                </div>
+                <div class="cloud-section" id="cloud-udetail">
+                    <div class="cloud-header" onclick="toggleCloud('cloud-udetail')">
+                        <span data-i18n="label_tag_cloud"></span>
+                        <span class="cloud-toggle">▼</span>
+                    </div>
+                    <div class="tag-cloud" id="udetail-tag-cloud"></div>
+                </div>
+            </div>
+            <div class="panel results-panel">
+                <div id="user-detail-list"></div>
+            </div>
+        </section>
+
+        <!-- ============ Download ============ -->
+        <section class="tab" id="tab-download">
+            <div class="download-panel">
+                <div class="progress-bar-wrap">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progress-fill"></div>
+                    </div>
+                    <div class="progress-text" id="progress-text">0 / 0</div>
+                </div>
+                <div class="download-stats">
+                    <div class="stat-item">
+                        <div class="stat-label" data-i18n="dl_pending"></div>
+                        <div class="stat-value" id="dl-pending">0</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label" data-i18n="dl_processed"></div>
+                        <div class="stat-value" id="dl-processed">0</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label" data-i18n="dl_failed"></div>
+                        <div class="stat-value" id="dl-failed">0</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label" data-i18n="dl_workers"></div>
+                        <div class="stat-value" id="dl-workers">0</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label" data-i18n="dl_status"></div>
+                        <div class="stat-value" id="dl-status">—</div>
+                    </div>
+                </div>
+                <div class="download-controls">
+                    <label data-i18n="dl_preset"></label>
+                    <select id="dl-preset" onchange="onPresetChange()">
+                        <option value="normal" data-i18n="dl_preset_normal"></option>
+                        <option value="high" data-i18n="dl_preset_high"></option>
+                    </select>
+                    <label data-i18n="dl_threads"></label>
+                    <input type="number" id="dl-threads" min="1" max="8" value="3" onchange="onThreadsChange()">
+                </div>
+                <div class="download-actions">
+                    <button class="secondary" onclick="retryFailed()" data-i18n="btn_retry_failed"></button>
+                    <button class="secondary" onclick="clearQueue()" data-i18n="btn_clear_queue"></button>
+                    <button class="secondary" id="btn-stop" onclick="stopQueue()" data-i18n="btn_stop"></button>
+                </div>
+            </div>
+            <button class="add-task-btn" id="btn-add-task" onclick="openAddTaskModal()" title="+">+</button>
+        </section>
+
+        <!-- ============ Settings ============ -->
+        <section class="tab" id="tab-settings">
+            <div class="panel">
+                <h3 data-i18n="settings_account"></h3>
+                <div class="row">
+                    <label class="label-wide" data-i18n="settings_token"></label>
+                    <input type="text" id="cfg-refresh_token" style="flex:1" data-i18n-placeholder="token_ph">
+                    <a href="#" onclick="event.preventDefault(); showTokenHelp(); return false;"
+                        style="color:#7eb6ff; text-decoration:none; font-size:18px; padding:0 6px;"
+                        data-i18n-title="token_help_title">❓</a>
+                </div>
+                <div class="row">
+                    <label class="label-wide" data-i18n="settings_language"></label>
+                    <select id="cfg-language" style="flex:1">
+                        <option value="auto" data-i18n="lang_auto"></option>
+                        <option value="zh-CN">简体中文</option>
+                        <option value="en">English</option>
+                    </select>
+                </div>
+                <div class="row">
+                    <button class="primary" onclick="saveConfig()" data-i18n="btn_save"></button>
+                    <button class="secondary" onclick="testLogin()" data-i18n="btn_test_login"></button>
+                    <button class="secondary" onclick="testLatency()" data-i18n="btn_test_latency"></button>
+                </div>
+            </div>
+            <div class="panel">
+                <h3 data-i18n="settings_download"></h3>
+                <div class="row">
+                    <label class="label-wide" data-i18n="settings_dir"></label>
+                    <input type="text" id="cfg-download_dir" style="flex:1">
+                </div>
+                <div class="row">
+                    <label class="label-wide" data-i18n="settings_proxy"></label>
+                    <input type="text" id="cfg-proxy" style="flex:1" placeholder="socks5://127.0.0.1:1080">
+                </div>
+                <div class="row">
+                    <label class="label-wide" data-i18n="settings_dl_delay"></label>
+                    <input type="number" id="cfg-download_delay" step="0.1" min="0" style="width:100px">
+                    <label class="label-wide" data-i18n="settings_api_delay"></label>
+                    <input type="number" id="cfg-api_request_delay" step="0.1" min="0" style="width:100px">
+                </div>
+                <div class="row">
+                    <label class="label-wide" data-i18n="settings_max_retries"></label>
+                    <input type="number" id="cfg-max_retries" min="1" style="width:100px">
+                    <label class="label-wide" data-i18n="settings_rate_delay"></label>
+                    <input type="number" id="cfg-rate_limit_retry_delay" min="1" style="width:100px">
+                    <label class="label-wide" data-i18n="settings_max_results"></label>
+                    <input type="number" id="cfg-max_results" min="1" max="500" style="width:100px">
+                </div>
+            </div>
+        </section>
+        <div class="modal-overlay" id="add-task-modal">
+            <div class="modal-content" style="max-width:640px">
+                <button class="modal-close" onclick="closeAddTaskModal()">×</button>
+                <h3 style="color:#7eb6ff; margin-bottom:16px" data-i18n="dl_add_task"></h3>
+
+                <div class="add-task-tabs">
+                    <button class="add-task-tab active" onclick="switchAddTaskTab('manual')"
+                        data-i18n="dl_add_manual"></button>
+                    <button class="add-task-tab" onclick="switchAddTaskTab('bookmark')"
+                        data-i18n="dl_add_bookmark"></button>
+                </div>
+
+                <div class="add-task-pane active" id="add-task-manual">
+                    <div class="row">
+                        <input type="text" id="manual-url" data-i18n-placeholder="manual_url_ph" style="flex:1">
+                        <button class="primary" onclick="addSingleUrl()" data-i18n="btn_enqueue"></button>
+                    </div>
+                    <div class="row" style="flex-direction:column; align-items:stretch">
+                        <label data-i18n="manual_batch" style="margin-bottom:6px"></label>
+                        <textarea id="manual-batch" rows="6"></textarea>
+                    </div>
+                    <div class="row" style="justify-content:flex-end">
+                        <button class="primary" onclick="addBatchUrls()" data-i18n="btn_batch_enqueue"></button>
+                    </div>
+                </div>
+
+                <div class="add-task-pane" id="add-task-bookmark">
+                    <div class="row">
+                        <input type="file" id="bookmark-file" accept=".html,.htm">
+                        <button class="primary" onclick="parseBookmark()" data-i18n="btn_parse"></button>
+                    </div>
+                    <div id="bookmark-preview" style="margin-top:10px; max-height:240px; overflow-y:auto;
+                                font-family:monospace; font-size:12px;"></div>
+                    <div class="row" style="margin-top:10px; justify-content:flex-end">
+                        <button class="primary" onclick="addBookmarkUrls()" id="bookmark-add-btn" disabled
+                            data-i18n="btn_enqueue_all"></button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- ============ Float Ball ============ -->
+    <div class="float-ball" id="float-ball" onclick="onFloatBallClick()">
+        <span class="ball-icon">⬇</span>
+        <span class="ball-count" id="ball-count">0</span>
+    </div>
+
+    <!-- ============ Advanced Recommend Modal ============ -->
+    <div class="modal-overlay" id="advanced-rec-modal">
+        <div class="modal-content" style="max-width:700px">
+            <button class="modal-close" onclick="closeAdvancedRecommend()">×</button>
+            <h3 style="color:#7eb6ff; margin-bottom:12px" data-i18n="adv_title"></h3>
+            <div class="adv-param">
+                <label data-i18n="adv_seeds"></label>
+                <input type="text" id="adv-seeds" data-i18n-placeholder="adv_seeds_ph" style="width:100%">
+                <div class="adv-hint" data-i18n="adv_seeds_hint"></div>
+            </div>
+            <div class="adv-param">
+                <label data-i18n="adv_viewed"></label>
+                <input type="text" id="adv-viewed" data-i18n-placeholder="adv_viewed_ph" style="width:100%">
+                <div class="adv-hint" data-i18n="adv_viewed_hint"></div>
+            </div>
+            <div class="adv-param">
+                <label><input type="checkbox" id="adv-ranking"> <span data-i18n="adv_ranking"></span></label>
+                <div class="adv-hint" data-i18n="adv_ranking_hint"></div>
+            </div>
+            <div class="adv-param">
+                <label><input type="checkbox" id="adv-privacy"> <span data-i18n="adv_privacy"></span></label>
+                <div class="adv-hint" data-i18n="adv_privacy_hint"></div>
+            </div>
+            <div class="adv-param">
+                <label data-i18n="adv_limit"></label>
+                <input type="number" id="adv-limit" value="60" min="1" max="120" style="width:100px">
+                <div class="adv-hint" data-i18n="adv_limit_hint"></div>
+            </div>
+            <div class="row" style="margin-top:16px; justify-content:flex-end">
+                <button class="secondary" onclick="closeAdvancedRecommend()" data-i18n="btn_cancel"></button>
+                <button class="primary" onclick="submitAdvancedRecommend()" data-i18n="btn_execute"></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ Token Help Modal ============ -->
+    <div class="modal-overlay" id="token-help-modal">
+        <div class="modal-content" style="max-width:640px">
+            <button class="modal-close" onclick="closeTokenHelp()">×</button>
+            <h3 style="color:#7eb6ff; margin-bottom:16px" data-i18n="token_help_title"></h3>
+            <div id="token-help-body" style="color:#c5c8cf; font-size:13px; line-height:1.7"></div>
+            <div class="row" style="margin-top:16px; justify-content:flex-end">
+                <button class="secondary" onclick="closeTokenHelp()" data-i18n="btn_close"></button>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script src="/static/i18n.js"></script>
+    <script src="/static/main.js"></script>
+</body>
+
+</html>
