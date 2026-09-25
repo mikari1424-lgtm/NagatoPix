@@ -30,6 +30,25 @@ let lastQueueState = {
     stopping: false,
 };
 let searchItemsRaw = [];
+let accountBookmarksItems = [];
+const lastCheckedIdx = {};
+
+let ivState = {
+    containerId: null,
+    items: null,
+    idx: -1,
+    pages: [],
+    pageIdx: 0,
+};
+
+const tableItemGetters = {
+    "ranking-list": () => rankingItems,
+    "search-list": () => searchItems,
+    "recommend-list": () => recommendItems,
+    "follow-list": () => followItems,
+    "user-detail-list": () => userDetailItems,
+    "account-bookmarks": () => accountBookmarksItems,
+};
 
 // ============ WebSocket ============
 let ws = null;
@@ -71,6 +90,40 @@ function handleMessage(msg) {
         case "init":
             fillConfig(msg.config);
             updateQueueStatus(msg);
+            if (msg.ui_state) restoreUiState(msg.ui_state);
+            if (msg.config.theme) applyTheme(msg.config.theme);
+            break;
+        case "theme_set":
+            applyTheme(msg.theme);
+            break;
+        case "ui_state_saved":
+            break;
+        case "items_added":
+            break;
+        case "account_result":
+            renderAccount(msg.profile);
+            break;
+        case "account_list":
+            renderAccountList(msg.accounts, msg.current_index);
+            break;
+        case "account_added":
+            closeAddAccountModal();
+            toast(t("account_added"), "success");
+            loadAccount(true);
+            break;
+        case "account_switched":
+            toast(t("account_switched"), "success");
+            loadAccount(true);
+            break;
+        case "account_removed":
+            toast(t("account_removed"), "success");
+            loadAccount(true);
+            break;
+        case "following_list":
+            renderFollowingList(msg.items);
+            break;
+        case "bookmarks_list":
+            renderBookmarksList(msg.items);
             break;
         case "queue_status":
             updateQueueStatus(msg);
@@ -91,31 +144,28 @@ function handleMessage(msg) {
                 msg.total,
             );
             break;
+        case "ranking_progress":
+            {
+                const el = document.getElementById("ranking-list");
+                if (el)
+                    el.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_ranking")} (${msg.phase}: ${msg.count})</div>`;
+                const s = document.getElementById("ranking-status");
+                if (s)
+                    s.textContent = t(
+                        "status_requesting",
+                        `${msg.phase}: ${msg.count}`,
+                    );
+            }
+            break;
         case "ranking_result":
             renderRankingResults(msg.items, msg.stats);
             break;
-        case "ranking_progress":
-            document.getElementById("ranking-list").innerHTML =
-                `<div class="loading"><div class="spinner"></div>${t("loading_ranking")} (${msg.phase}: ${msg.count})</div>`;
-            document.getElementById("ranking-status").textContent = t(
-                "status_requesting",
-                `${msg.phase}: ${msg.count}`,
-            );
-            break;
-        case "recommend_result":
-            renderRecommendResults(msg.items, msg.mode);
-            break;
         case "follow_progress":
-            document.getElementById("follow-list").innerHTML =
-                `<div class="loading"><div class="spinner"></div>${t("loading_follow")} (${msg.count})</div>`;
-            break;
-        case "follow_result":
-            renderFollowResults(
-                msg.items,
-                msg.offset,
-                msg.has_more,
-                msg.batch_size,
-            );
+            {
+                const el = document.getElementById("follow-list");
+                if (el)
+                    el.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_follow")} (${msg.count})</div>`;
+            }
             break;
         case "bookmark_parsed":
             renderBookmarkPreview(msg.urls);
@@ -164,6 +214,92 @@ function handleMessage(msg) {
             break;
         case "startup_latency":
             if (msg.latency > 300) toast(t("toast_network_bad"), "warn");
+            break;
+        case "follow_user_result":
+            if (
+                msg.success &&
+                currentUserDetail &&
+                currentUserDetail.id === msg.uid
+            ) {
+                currentUserDetail.is_followed = msg.action === "follow";
+                renderUserHeaderOnly(currentUserDetail);
+                toast(
+                    msg.action === "follow"
+                        ? t("toast_followed")
+                        : t("toast_unfollowed"),
+                    "success",
+                );
+            }
+            break;
+
+        case "follow_new_result":
+            try {
+                renderFollowResults(
+                    msg.items,
+                    msg.offset,
+                    msg.has_more,
+                    msg.batch_size,
+                );
+            } catch (e) {
+                console.error("renderFollowResults failed:", e);
+                const btn = document.getElementById("btn-load-follow");
+                if (btn) btn.disabled = false;
+                toast("Render failed: " + e.message, "error");
+            }
+            break;
+        case "follow_user_result":
+            if (
+                msg.success &&
+                currentUserDetail &&
+                currentUserDetail.id === msg.uid
+            ) {
+                currentUserDetail.is_followed = msg.action === "follow";
+                renderUserHeaderOnly(currentUserDetail);
+                toast(
+                    msg.action === "follow"
+                        ? t("toast_followed")
+                        : t("toast_unfollowed"),
+                    "success",
+                );
+            }
+            break;
+
+        case "follow_new_result":
+            try {
+                renderFollowResults(
+                    msg.items,
+                    msg.offset,
+                    msg.has_more,
+                    msg.batch_size,
+                );
+            } catch (e) {
+                console.error("renderFollowResults failed:", e);
+                const btn = document.getElementById("btn-load-follow");
+                if (btn) btn.disabled = false;
+                toast("Render failed: " + e.message, "error");
+            }
+            break;
+        case "bookmark_result":
+            {
+                const it = ivState.items?.[ivState.idx];
+                if (it && it.id === msg.id) {
+                    if (msg.success) {
+                        it.is_bookmarked = msg.action === "add";
+                        renderIvActions(it);
+                        toast(
+                            msg.action === "add"
+                                ? t("toast_bookmark_added")
+                                : t("toast_bookmark_removed"),
+                            "success",
+                        );
+                    } else {
+                        toast(
+                            t("toast_bookmark_failed", msg.msg || ""),
+                            "error",
+                        );
+                    }
+                }
+            }
             break;
     }
 }
@@ -558,36 +694,47 @@ function applySort(containerId) {
 // ============ Render table ============
 function renderTable(containerId, items) {
     const container = document.getElementById(containerId);
+    if (!container) return;
+
     if (!items.length) {
-        container.innerHTML = `<div style="padding:20px; text-align:center; color:#666">${t("no_result")}</div>`;
+        container.innerHTML = `<div class="empty-msg">${t("no_result")}</div>`;
         updateSelectionCount();
         return;
     }
+
+    // Preserve selected PIDs across re-render / 重渲染时保留选中
     const selectedPids = new Set();
     container.querySelectorAll("tr.selected").forEach((tr) => {
-        const firstTd = tr.querySelector("td");
-        if (firstTd) selectedPids.add(firstTd.textContent.trim());
+        const idTd = tr.querySelector('td[data-col="id"]');
+        if (idTd) selectedPids.add(idTd.textContent.trim());
     });
+
     const state = sortState[containerId];
     const cols = TABLE_COLUMNS[containerId];
 
-    const thead = cols
-        .map((c) => {
-            const sortable = c.sortable !== false;
-            const indicator =
-                state.col === c.key ? (state.asc ? " ▲" : " ▼") : "";
-            const cls = sortable ? "sortable-th" : "";
-            const align = c.numeric ? ' style="text-align:right"' : "";
-            const onclick = sortable
-                ? ` onclick="sortTable('${containerId}', '${c.key}')"`
-                : "";
-            return `<th${align} class="${cls}"${onclick}>${t(c.get)}${indicator}</th>`;
-        })
-        .join("");
+    // ---- Table head ----
+    const thead =
+        '<th class="col-checkbox"></th>' +
+        cols
+            .map((c) => {
+                const sortable = c.sortable !== false;
+                const indicator =
+                    state.col === c.key ? (state.asc ? " ▲" : " ▼") : "";
+                const cls = sortable ? "sortable-th" : "";
+                const align = c.numeric ? ' style="text-align:right"' : "";
+                const onclick = sortable
+                    ? ` onclick="sortTable('${containerId}', '${c.key}')"`
+                    : "";
+                return `<th${align} class="${cls}"${onclick}>${t(c.get)}${indicator}</th>`;
+            })
+            .join("");
 
+    // ---- Table rows ----
     const rows = items
         .map((it, idx) => {
             const isSelected = selectedPids.has(String(it.id));
+
+            // Badges inline after title / 标题后的徽章
             let badges = "";
             if (it.is_new) badges += '<span class="badge new">NEW</span>';
             if (it.ai_generated) badges += '<span class="badge ai">AI</span>';
@@ -595,59 +742,174 @@ function renderTable(containerId, items) {
                 const cls = it.restriction.toLowerCase().replace("-", "");
                 badges += `<span class="badge ${cls}">${it.restriction}</span>`;
             }
-            const tagsHtml = (it.tags || [])
-                .slice(0, 5)
-                .map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`)
-                .join("");
-            const titleHtml = `<a href="https://www.pixiv.net/artworks/${it.id}"
-            target="_blank" rel="noopener"
-            onclick="event.stopPropagation()"
-            style="color:#7eb6ff; text-decoration:none; border-bottom:1px dashed #7eb6ff;"
-            title="${t("th_title_link")}">${escapeHtml(truncate(it.title, 40))}</a>${badges}`;
 
-            let tds = "";
+            // Tags: clickable / 可点击标签
+            const tagsHtml = (it.tags || [])
+                .slice(0, 6)
+                .map(
+                    (tag) =>
+                        `<span class="tag tag-clickable"
+                   data-action="tag-search"
+                   data-tag="${escapeHtml(tag)}"
+                   title="${t("tag_search_title")}">${escapeHtml(tag)}</span>`,
+                )
+                .join("");
+
+            // Title: opens viewer / 标题：打开查看模态框
+            const titleHtml = `<a href="#" class="illust-title-link"
+                data-action="open-illust"
+                data-container="${containerId}"
+                data-idx="${idx}"
+                title="${t("iv_open_pixiv")}">${escapeHtml(truncate(it.title || "", 40))}</a>${badges}`;
+
+            // Checkbox / 复选框
+            let tds = `<td class="col-checkbox">
+            <img class="row-checkbox"
+                 src="/ui_icons/${isSelected ? "selected" : "unselected"}.svg"
+                 alt=""
+                 data-action="toggle-checkbox"
+                 data-container="${containerId}"
+                 data-idx="${idx}">
+        </td>`;
+
             for (const c of cols) {
                 switch (c.key) {
                     case "id":
-                        tds += `<td>${it.id}</td>`;
+                        tds += `<td data-col="id">${it.id}</td>`;
                         break;
                     case "title":
-                        tds += `<td>${titleHtml}</td>`;
+                        tds += `<td data-col="title">${titleHtml}</td>`;
                         break;
                     case "page_count":
-                        tds += `<td style="text-align:right">${it.page_count || 1}</td>`;
+                        tds += `<td data-col="page_count" style="text-align:right">${it.page_count || 1}</td>`;
                         break;
                     case "author":
                         if (it.author_id) {
-                            tds += `<td><a href="#" onclick="event.preventDefault(); event.stopPropagation(); openUserDetail(${it.author_id}); return false;" style="color:#7eb6ff; text-decoration:none; border-bottom:1px dashed #7eb6ff;" title="${t("th_author_link")}">${escapeHtml(it.author)}</a></td>`;
+                            tds += `<td data-col="author"><a href="#"
+                            data-action="open-user"
+                            data-uid="${it.author_id}"
+                            title="${t("th_author_link")}">${escapeHtml(it.author)}</a></td>`;
                         } else {
-                            tds += `<td>${escapeHtml(it.author)}</td>`;
+                            tds += `<td data-col="author">${escapeHtml(it.author)}</td>`;
                         }
                         break;
                     case "views":
-                        tds += `<td style="text-align:right">${formatNum(it.views)}</td>`;
+                        tds += `<td data-col="views" style="text-align:right">${formatNum(it.views)}</td>`;
                         break;
                     case "bookmarks":
-                        tds += `<td style="text-align:right">${formatNum(it.bookmarks)}</td>`;
+                        tds += `<td data-col="bookmarks" style="text-align:right">${formatNum(it.bookmarks)}</td>`;
                         break;
                     case "tags":
-                        tds += `<td>${tagsHtml}</td>`;
+                        tds += `<td data-col="tags">${tagsHtml}</td>`;
                         break;
                     case "date":
-                        tds += `<td>${it.date || ""}</td>`;
+                        tds += `<td data-col="date">${it.date || ""}</td>`;
                         break;
                 }
             }
-            return `<tr data-idx="${idx}" class="${isSelected ? "selected" : ""}" onclick="toggleRow(this)">${tds}</tr>`;
+
+            return `<tr data-idx="${idx}" class="${isSelected ? "selected" : ""}">${tds}</tr>`;
         })
         .join("");
+
     container.innerHTML = `<table><thead><tr>${thead}</tr></thead><tbody>${rows}</tbody></table>`;
     updateSelectionCount();
 }
+// ============ Table event delegation ============
+document.addEventListener('click', (e) => {
+    const target = e.target.closest('[data-action]');
+    if (!target) return;
+
+    const action = target.dataset.action;
+
+    // 1) Checkbox — toggle selection / 复选框：切换选中
+    if (action === 'toggle-checkbox') {
+        e.preventDefault();
+        e.stopPropagation();
+        const containerId = target.dataset.container;
+        const idx = parseInt(target.dataset.idx, 10);
+        onCheckboxClick(e, containerId, idx);
+        return;
+    }
+
+    // 2) Title — open illust viewer modal / 标题：打开查看模态框
+    if (action === 'open-illust') {
+        e.preventDefault();
+        e.stopPropagation();
+        const containerId = target.dataset.container;
+        const idx = parseInt(target.dataset.idx, 10);
+        openIllustViewer(containerId, idx);
+        return;
+    }
+
+    // 3) Author — open user detail / 作者：打开用户详情
+    if (action === 'open-user') {
+        e.preventDefault();
+        e.stopPropagation();
+        const uid = parseInt(target.dataset.uid, 10);
+        if (uid) openUserDetail(uid);
+        return;
+    }
+
+    // 4) Tag — search this tag / 标签：搜索
+    if (action === 'tag-search') {
+        e.preventDefault();
+        e.stopPropagation();
+        onTagClick(e, target);
+        return;
+    }
+}, true);
 
 function toggleRow(tr) {
     tr.classList.toggle("selected");
+    updateCheckboxIcon(tr);
     updateSelectionCount();
+    scheduleUiStateSave();
+}
+function onCheckboxClick(evt, containerId, idx) {
+    evt.preventDefault();
+    evt.stopPropagation();
+
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    const rows = container.querySelectorAll("tr[data-idx]");
+    if (!rows[idx]) return;
+
+    const lastIdx = lastCheckedIdx[containerId];
+
+    if (evt.shiftKey && lastIdx !== undefined && lastIdx !== null) {
+        const start = Math.min(lastIdx, idx);
+        const end = Math.max(lastIdx, idx);
+        const targetSelected = !rows[idx].classList.contains("selected");
+        for (let i = start; i <= end; i++) {
+            const row = rows[i];
+            if (!row) continue;
+            if (targetSelected) row.classList.add("selected");
+            else row.classList.remove("selected");
+            updateCheckboxIcon(row);
+        }
+    } else {
+        rows[idx].classList.toggle("selected");
+        updateCheckboxIcon(rows[idx]);
+    }
+
+    lastCheckedIdx[containerId] = idx;
+    updateSelectionCount();
+    scheduleUiStateSave();
+}
+
+function updateCheckboxIcon(row) {
+    const cb = row.querySelector(".row-checkbox");
+    if (!cb) return;
+    const isSelected = row.classList.contains("selected");
+    cb.src = isSelected ? "/ui_icons/selected.svg" : "/ui_icons/unselected.svg";
+}
+
+function updateCheckboxIcon(row) {
+    const cb = row.querySelector(".row-checkbox");
+    if (!cb) return;
+    const isSelected = row.classList.contains("selected");
+    cb.src = isSelected ? "/ui_icons/selected.svg" : "/ui_icons/unselected.svg";
 }
 
 function getSelectedUrls(containerId, items) {
@@ -750,20 +1012,24 @@ function fetchRanking() {
 function renderRankingResults(items, stats) {
     rankingItemsAll = items;
     filterSets["ranking-tag-cloud"].clear();
-    document.getElementById("ranking-filter-status").textContent = "";
     rankingItems = items.slice();
     buildTagCloud("ranking-tag-cloud", items, "filterRankingByTags");
     renderTable("ranking-list", rankingItems);
-    document.getElementById("btn-fetch-ranking").disabled = false;
-    document.getElementById("ranking-status").textContent = t(
-        "status_done_ranking",
-        items.length,
-    );
-    const newCount = items.filter((x) => x.is_new).length;
+    const btn = document.getElementById("btn-fetch-ranking");
+    if (btn) btn.disabled = false;
+
+    const todayCount = stats?.today ?? items.length;
+    const yesterdayCount = stats?.yesterday ?? 0;
+    const newCount = stats?.new ?? items.filter((x) => x.is_new).length;
+
+    const statusEl = document.getElementById("ranking-status");
+    if (statusEl) statusEl.textContent = t("status_done_ranking", todayCount);
+
     toast(
-        `${t("toast_ranking_done", items.length)} · NEW ${newCount}`,
+        `${t("toast_ranking_done", todayCount)} · NEW ${newCount} (yesterday: ${yesterdayCount})`,
         "success",
     );
+    scheduleUiStateSave();
 }
 
 function filterRankingByTags() {
@@ -779,10 +1045,6 @@ function filterRankingByTags() {
         });
     }
     renderTable("ranking-list", rankingItems);
-    const total = rankingItemsAll.length;
-    const shown = rankingItems.length;
-    document.getElementById("ranking-filter-status").textContent =
-        chipTags.length ? t("status_filter", shown, total) : "";
 }
 
 function clearRankingFilter() {
@@ -847,9 +1109,17 @@ function doSearch() {
     });
 }
 
+function searchEncyclopedia() {
+    const tag = document.getElementById("search-tag")?.value.trim();
+    if (!tag) return toast(t("toast_need_tag_for_encyclopedia"), "error");
+    const url = `https://zh.moegirl.org.cn/index.php?fulltext=1&search=%22${encodeURIComponent(tag)}%22&title=Special%3A%E6%90%9C%E7%B4%A2`;
+    window.open(url, "_blank", "noopener");
+}
+
 function renderSearchResults(items, startPage, pages) {
     searchItemsRaw = items;
     applySearchBookmarkFilter(startPage, pages);
+    scheduleUiStateSave();
 }
 
 function applySearchBookmarkFilter(startPage, pages) {
@@ -937,21 +1207,26 @@ function doUserSearch() {
     if (!word) return toast(t("toast_need_keyword"), "error");
     const page = parseInt(document.getElementById("usearch-page").value) || 1;
     const offset = (page - 1) * 30;
-    document.getElementById("usearch-list").innerHTML =
-        `<div class="loading"><div class="spinner"></div>${t("loading_usearch")}</div>`;
-    document.getElementById("btn-user-search").disabled = true;
-    document.getElementById("usearch-status").textContent = t(
-        "status_requesting",
-        word,
-    );
+
+    const container = document.getElementById("search-list");
+    if (container) {
+        container.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_usearch")}</div>`;
+    }
+    const btn = document.getElementById("btn-user-search");
+    if (btn) btn.disabled = true;
+    const statusEl = document.getElementById("usearch-status");
+    if (statusEl) statusEl.textContent = t("status_requesting", word);
+
     send({ cmd: "search_users", word, offset });
 }
 
 function renderUserSearchResults(items) {
     userSearchItems = items;
-    const container = document.getElementById("usearch-list");
+    const container = document.getElementById("search-list");
+    if (!container) return;
+
     if (!items.length) {
-        container.innerHTML = `<div style="padding:20px; text-align:center; color:#666">${t("no_result")}</div>`;
+        container.innerHTML = `<div class="empty-msg">${t("no_result")}</div>`;
     } else {
         const rows = items
             .map(
@@ -959,23 +1234,27 @@ function renderUserSearchResults(items) {
             <tr>
                 <td>${u.id}</td>
                 <td><a href="#" onclick="event.preventDefault(); openUserDetail(${u.id}); return false;"
-                       style="color:#7eb6ff; text-decoration:none; border-bottom:1px dashed #7eb6ff;"
+                       style="color:var(--accent); text-decoration:none; border-bottom:1px dashed var(--accent);"
                        title="${t("th_user_detail_link")}">${escapeHtml(u.name)}</a></td>
-                <td style="color:#808590">${escapeHtml(u.account)}</td>
-                <td>${u.is_followed ? `<span style="color:#4ade80">${t("th_followed_yes")}</span>` : ""}</td>
+                <td style="color:var(--text-tertiary)">${escapeHtml(u.account)}</td>
+                <td>${u.is_followed ? `<span style="color:var(--success)">${t("th_followed_yes")}</span>` : ""}</td>
             </tr>`,
             )
             .join("");
         container.innerHTML = `<table>
-            <thead><tr><th>${t("th_uid")}</th><th>${t("th_name")}</th><th>${t("th_account")}</th><th>${t("th_followed")}</th></tr></thead>
+            <thead><tr>
+                <th>${t("th_uid")}</th><th>${t("th_name")}</th>
+                <th>${t("th_account")}</th><th>${t("th_followed")}</th>
+            </tr></thead>
             <tbody>${rows}</tbody>
         </table>`;
     }
-    document.getElementById("btn-user-search").disabled = false;
-    document.getElementById("usearch-status").textContent = t(
-        "status_done",
-        items.length,
-    );
+
+    const btn = document.getElementById("btn-user-search");
+    if (btn) btn.disabled = false;
+    const statusEl = document.getElementById("usearch-status");
+    if (statusEl) statusEl.textContent = t("status_done", items.length);
+
     toast(t("toast_user_search_done", items.length), "success");
 }
 
@@ -990,12 +1269,18 @@ function openUserDetail(uid) {
     const navBtn = document.querySelector('nav button[data-tab="user-detail"]');
     if (navBtn) navBtn.classList.add("active");
     document.getElementById("tab-user-detail").classList.add("active");
+
+    // Clear any previous background before loading new user / 加载新用户前清空旧背景
+    document.body.classList.remove("has-user-bg");
+
     document.getElementById("udetail-uid").value = uid;
     resetUserDetailView();
+
     document.getElementById("udetail-header").innerHTML =
         `<div class="loading"><div class="spinner"></div>${t("loading_user")}</div>`;
     document.getElementById("udetail-status").textContent = `UID: ${uid}`;
     document.getElementById("btn-load-udetail").disabled = true;
+
     send({ cmd: "user_detail", uid });
 }
 
@@ -1003,13 +1288,20 @@ function resetUserDetailView() {
     userDetailUid = null;
     userDetailItems = [];
     userDetailAllItems = [];
+    currentUserDetail = null;
+
+    document.body.style.removeProperty("--user-bg");
+    document.body.classList.remove("has-user-bg");
+
     const cloud = document.getElementById("udetail-tag-cloud");
     if (cloud) cloud.innerHTML = "";
     filterSets["udetail-tag-cloud"] = new Set();
-    const fi = document.getElementById("udetail-filter");
-    if (fi) fi.value = "";
-    document.getElementById("udetail-filter-status").textContent = "";
-    document.getElementById("user-detail-list").innerHTML = "";
+
+    const list = document.getElementById("user-detail-list");
+    if (list) list.innerHTML = "";
+
+    const header = document.getElementById("udetail-header");
+    if (header) header.innerHTML = "";
 }
 
 function loadUserDetailFromInput() {
@@ -1084,10 +1376,90 @@ function buildUserCardHtml(user) {
         </div>`;
 }
 
+let currentUserDetail = null;
+
 function renderUserHeaderOnly(user) {
-    document.getElementById("udetail-header").innerHTML =
-        buildUserCardHtml(user);
+    currentUserDetail = user;
+
+    // Background image / 背景图
+    if (user.background_image_url) {
+        const proxy = `/proxy_image?url=${encodeURIComponent(user.background_image_url)}`;
+        document.body.style.setProperty("--user-bg", `url("${proxy}")`);
+    } else {
+        document.body.style.removeProperty("--user-bg");
+    }
+
+    applyUserBgVisibility();
+
+    const avatarProxy = user.avatar
+        ? `/proxy_image?url=${encodeURIComponent(user.avatar)}`
+        : "";
+    const avatarHtml = avatarProxy
+        ? `<img class="user-avatar" src="${avatarProxy}" alt="avatar"
+                onerror="this.style.background='#3a3f48'; this.removeAttribute('src');">`
+        : '<div class="user-avatar"></div>';
+
+    const officialUrl = `https://www.pixiv.net/users/${user.id}`;
+    const metaParts = [];
+    if (user.region) metaParts.push(`🌍 ${escapeHtml(user.region)}`);
+    if (user.total_follow_users)
+        metaParts.push(`👥 ${formatNum(user.total_follow_users)}`);
+    if (user.total_illusts) metaParts.push(`🎨 ${user.total_illusts}`);
+    if (user.total_manga) metaParts.push(`📚 ${user.total_manga}`);
+    if (user.is_accept_request === true) {
+        metaParts.push(
+            `<span style="color:var(--success)">${t("meta_accept_request_yes")}</span>`,
+        );
+    } else if (user.is_accept_request === false) {
+        metaParts.push(
+            `<span style="color:var(--text-tertiary)">${t("meta_accept_request_no")}</span>`,
+        );
+    }
+
+    const followBtn = user.is_followed
+        ? `<button class="follow-btn following" onclick="toggleFollow()">${t("following_btn")}</button>`
+        : `<button class="follow-btn" onclick="toggleFollow()">${t("follow_btn")}</button>`;
+
+    const commentHtml = user.comment
+        ? `<div class="user-comment">${escapeHtml(user.comment)}</div>`
+        : "";
+
+    document.getElementById("udetail-header").innerHTML = `
+        <div class="user-card">
+            ${avatarHtml}
+            <div class="user-info">
+                <div style="display:flex; align-items:center; gap:12px">
+                    <div>
+                        <a class="user-name" href="${officialUrl}" target="_blank" rel="noopener"
+                           title="${t("th_user_name_link")}">${escapeHtml(user.name)}</a>
+                        <span class="user-account">@${escapeHtml(user.account)} (UID: ${user.id})</span>
+                    </div>
+                    ${followBtn}
+                </div>
+                <div class="user-meta">${metaParts.join("")}</div>
+                ${commentHtml}
+            </div>
+        </div>`;
     document.getElementById("btn-load-udetail").disabled = false;
+}
+
+function toggleFollow() {
+    if (!currentUserDetail) return;
+    const uid = currentUserDetail.id;
+    const action = currentUserDetail.is_followed ? 'unfollow' : 'follow';
+    send({cmd: 'follow_user', uid, action});
+}
+
+function applyUserBgVisibility() {
+    const activeTab = document.querySelector("nav button.active")?.dataset.tab;
+    const hasBg = !!(
+        currentUserDetail && currentUserDetail.background_image_url
+    );
+    if (activeTab === "user-detail" && hasBg) {
+        document.body.classList.add("has-user-bg");
+    } else {
+        document.body.classList.remove("has-user-bg");
+    }
 }
 
 function renderUserDetail(user, items) {
@@ -1103,6 +1475,7 @@ function renderUserDetail(user, items) {
     buildTagCloud("udetail-tag-cloud", items, "applyUserDetailFilter");
     renderTable("user-detail-list", userDetailItems);
     toast(t("toast_user_detail_done", items.length), "success");
+    scheduleUiStateSave();
 }
 
 function applyUserDetailFilter() {
@@ -1118,10 +1491,6 @@ function applyUserDetailFilter() {
         });
     }
     renderTable("user-detail-list", userDetailItems);
-    const total = userDetailAllItems.length;
-    const shown = userDetailItems.length;
-    document.getElementById("udetail-filter-status").textContent =
-        chipTags.length ? t("status_filter", shown, total) : "";
 }
 
 function clearUserDetailFilter() {
@@ -1172,6 +1541,7 @@ function renderRecommendResults(items, mode) {
         mode,
     );
     toast(t("toast_recommend_done", items.length), "success");
+    scheduleUiStateSave();
 }
 
 function openAdvancedRecommend() {
@@ -1242,28 +1612,49 @@ function loadFollowNew(offset) {
 }
 
 function renderFollowResults(items, offset, hasMore, batchSize) {
+    // 先恢复按钮，避免渲染异常导致按钮永久禁用
+    const btn = document.getElementById("btn-load-follow");
+    if (btn) btn.disabled = false;
+
     followItemsAll = items;
     followCurrentOffset = offset;
     followBatchSize = batchSize || 300;
     followItems = items.slice();
+
     filterSets["follow-tag-cloud"].clear();
     filterSets["follow-author-cloud"].clear();
-    document.getElementById("follow-filter-status").textContent = "";
-    buildTagCloud("follow-tag-cloud", items, "applyFollowFilter", "tags");
-    buildTagCloud("follow-author-cloud", items, "applyFollowFilter", "author");
-    renderTable("follow-list", followItems);
-    document.getElementById("btn-load-follow").disabled = false;
+
+    try {
+        buildTagCloud("follow-tag-cloud", items, "applyFollowFilter", "tags");
+        buildTagCloud(
+            "follow-author-cloud",
+            items,
+            "applyFollowFilter",
+            "author",
+        );
+        renderTable("follow-list", followItems);
+    } catch (e) {
+        console.error("follow render failed:", e);
+        const list = document.getElementById("follow-list");
+        if (list)
+            list.innerHTML = `<div class="empty-msg">Render error: ${escapeHtml(e.message)}</div>`;
+        return;
+    }
+
     const page = Math.floor(offset / followBatchSize) + 1;
     followPage = page;
-    document.getElementById("follow-status").textContent = t(
-        "status_done",
-        items.length,
-    );
-    document.getElementById("follow-page-info").textContent = t(
-        "page_label",
-        page,
-    );
-    toast(t("toast_follow_done", items.length), "success");
+    const statusEl = document.getElementById("follow-status");
+    if (statusEl) statusEl.textContent = t("status_done", items.length);
+    const pageEl = document.getElementById("follow-page-info");
+    if (pageEl) pageEl.textContent = t("page_label", page);
+
+    if (!hasMore) {
+        toast(t("toast_follow_end"), "warn");
+        if (pageEl) pageEl.textContent += " · " + t("toast_follow_end");
+    } else {
+        toast(t("toast_follow_done", items.length), "success");
+    }
+    scheduleUiStateSave();
 }
 
 function applyFollowFilter() {
@@ -1285,12 +1676,6 @@ function applyFollowFilter() {
     }
     followItems = filtered;
     renderTable("follow-list", followItems);
-    const total = followItemsAll.length;
-    const shown = followItems.length;
-    document.getElementById("follow-filter-status").textContent =
-        chipTags.length || chipAuthors.length
-            ? t("status_filter", shown, total)
-            : "";
 }
 
 function clearFollowFilter() {
@@ -1305,9 +1690,15 @@ function clearFollowFilter() {
     applyFollowFilter();
 }
 
-function followPrevPage() {
-    if (followCurrentOffset <= 0) return toast(t("toast_first_page"), "error");
-    loadFollowNew(Math.max(0, followCurrentOffset - followBatchSize));
+function clearFollowFilter() {
+    filterSets["follow-tag-cloud"].clear();
+    filterSets["follow-author-cloud"].clear();
+    document
+        .querySelectorAll(
+            "#follow-tag-cloud .tag-chip, #follow-author-cloud .tag-chip",
+        )
+        .forEach((el) => el.classList.remove("active"));
+    applyFollowFilter();
 }
 function followNextPage() {
     loadFollowNew(followCurrentOffset + followBatchSize);
@@ -1460,8 +1851,790 @@ function onDurationChange() {
         row.style.display = "none";
     }
 }
-// ============ Boot ============
+
+function enqueueSelected(containerId, items) {
+    const selected = [];
+    document.querySelectorAll(`#${containerId} tr.selected`).forEach((tr) => {
+        const it = items[parseInt(tr.dataset.idx)];
+        if (it) selected.push(it);
+    });
+    if (!selected.length) return toast(t("toast_no_select"), "error");
+
+    const payload = selected.map((it) => {
+        const entry = { url: `https://www.pixiv.net/artworks/${it.id}` };
+        if (it._slim_illust) {
+            entry.metadata = { illust: it._slim_illust };
+        }
+        return entry;
+    });
+    send({ cmd: "add_items", items: payload });
+
+    document.querySelectorAll(`#${containerId} tr.selected`).forEach((tr) => {
+        tr.classList.remove("selected");
+        updateCheckboxIcon(tr);
+    });
+    lastCheckedIdx[containerId] = null;
+    updateSelectionCount();
+    toast(t("toast_selected_queued", selected.length), "success");
+}
+
+function onFloatBallClick() {
+    const info = getSelectionInfo();
+    if (!info) return;
+    enqueueSelected(info.containerId, info.items);
+}
+// ============ Theme ============
+function applyTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    document.getElementById('theme-icon').textContent = theme === 'dark' ? '🌙' : '☀️';
+    localStorage.setItem('nagato_theme', theme);
+}
+
+function toggleTheme() {
+    const cur = document.documentElement.getAttribute('data-theme') || 'dark';
+    const next = cur === 'dark' ? 'light' : 'dark';
+    applyTheme(next);
+    send({cmd: 'set_theme', theme: next});
+}
+// Saving States
+let uiStateSaveTimer = null;
+
+function scheduleUiStateSave() {
+    if (uiStateSaveTimer) clearTimeout(uiStateSaveTimer);
+    uiStateSaveTimer = setTimeout(saveUiState, 500);
+}
+
+function saveUiState() {
+    const state = {
+        active_tab: getActiveTab(),
+        theme: document.documentElement.getAttribute("data-theme") || "dark",
+        ranking: {
+            mode: document.getElementById("ranking-mode")?.value,
+            items: rankingItemsAll.slice(0, 500),
+        },
+        search: {
+            mode: document.getElementById("search-mode")?.value,
+            tag: document.getElementById("search-tag")?.value,
+            sort: document.getElementById("search-sort")?.value,
+            page: document.getElementById("search-page")?.value,
+            pages: document.getElementById("search-pages")?.value,
+            target: document.getElementById("search-target")?.value,
+            duration: document.getElementById("search-duration")?.value,
+            items: searchItemsRaw.slice(0, 500),
+        },
+        recommend: {
+            items: recommendItems.slice(0, 500),
+        },
+        follow: {
+            restrict: document.getElementById("follow-restrict")?.value,
+            offset: followCurrentOffset,
+            items: followItemsAll.slice(0, 500),
+        },
+        user_detail: {
+            uid: userDetailUid,
+            user: currentUserDetail ? { ...currentUserDetail } : null,
+            items: userDetailAllItems.slice(0, 500),
+        },
+    };
+    send({ cmd: "save_ui_state", state });
+}
+
+function restoreUiState(state) {
+    if (!state) return;
+    if (state.theme) applyTheme(state.theme);
+    if (state.ranking?.mode) {
+        const el = document.getElementById("ranking-mode");
+        if (el) el.value = state.ranking.mode;
+    }
+    if (state.ranking?.items?.length) {
+        rankingItemsAll = state.ranking.items;
+        rankingItems = rankingItemsAll.slice();
+        buildTagCloud("ranking-tag-cloud", rankingItems, "filterRankingByTags");
+        renderTable("ranking-list", rankingItems);
+    }
+    if (state.search?.tag) {
+        const el = document.getElementById("search-tag");
+        if (el) el.value = state.search.tag;
+    }
+    if (state.search?.items?.length) {
+        searchItemsRaw = state.search.items;
+        searchItems = searchItemsRaw.slice();
+        renderTable("search-list", searchItems);
+    }
+    if (state.recommend?.items?.length) {
+        recommendItems = state.recommend.items;
+        renderTable("recommend-list", recommendItems);
+    }
+    if (state.follow?.items?.length) {
+        followItemsAll = state.follow.items;
+        followItems = followItemsAll.slice();
+        followCurrentOffset = state.follow.offset || 0;
+        buildTagCloud(
+            "follow-tag-cloud",
+            followItems,
+            "applyFollowFilter",
+            "tags",
+        );
+        buildTagCloud(
+            "follow-author-cloud",
+            followItems,
+            "applyFollowFilter",
+            "author",
+        );
+        renderTable("follow-list", followItems);
+    }
+    if (state.user_detail?.uid && state.user_detail?.user) {
+        userDetailUid = state.user_detail.uid;
+        currentUserDetail = state.user_detail.user;
+        renderUserHeaderOnly(currentUserDetail);
+        if (state.user_detail.items?.length) {
+            userDetailAllItems = state.user_detail.items;
+            userDetailItems = userDetailAllItems.slice();
+            buildTagCloud(
+                "udetail-tag-cloud",
+                userDetailItems,
+                "applyUserDetailFilter",
+            );
+            renderTable("user-detail-list", userDetailItems);
+        }
+    }
+    if (state.active_tab) {
+        const btn = document.querySelector(
+            `nav button[data-tab="${state.active_tab}"]`,
+        );
+        if (btn) btn.click();
+    }
+}
+function loadAccount(forceRefresh) {
+    const container = document.getElementById("account-header");
+    if (container) {
+        container.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_account")}</div>`;
+    }
+    send({ cmd: forceRefresh ? "refresh_account" : "get_account" });
+    send({ cmd: "list_accounts" });
+}
+
+function renderAccount(profile) {
+    const container = document.getElementById("account-header");
+    if (!container) return;
+    if (!profile || !profile.id) {
+        container.innerHTML = `<div class="empty-msg">${t("account_load_failed")}</div>`;
+        return;
+    }
+
+    const avatarHtml = profile.avatar
+        ? `<img class="account-avatar"
+                src="/proxy_image?url=${encodeURIComponent(profile.avatar)}"
+                alt=""
+                onerror="this.onerror=null; this.removeAttribute('src');">`
+        : '<div class="account-avatar"></div>';
+
+    container.innerHTML = `
+        <div class="account-card">
+            ${avatarHtml}
+            <div class="account-info">
+                <div>
+                    <a class="account-name" href="https://www.pixiv.net/users/${profile.id}"
+                       target="_blank" rel="noopener">${escapeHtml(profile.name || "")}</a>
+                    <span class="account-account">@${escapeHtml(profile.account || "")}</span>
+                </div>
+                <div class="account-stats">
+                    <div class="account-stat">
+                        <span class="num">${formatNum(profile.total_illusts || 0)}</span>
+                        <span class="lbl">${t("meta_illusts")}</span>
+                    </div>
+                    <div class="account-stat clickable"
+                         onclick="loadFollowing()"
+                         title="${t("account_click_load_following")}">
+                        <span class="num">${formatNum(profile.total_follow_users || 0)}</span>
+                        <span class="lbl">${t("meta_following")}</span>
+                    </div>
+                    <div class="account-stat clickable"
+                         onclick="loadBookmarks()"
+                         title="${t("account_click_load_bookmarks")}">
+                        <span class="num">${formatNum(profile.total_illust_bookmarks_public || 0)}</span>
+                        <span class="lbl">${t("account_bookmarks_short")}</span>
+                    </div>
+                </div>
+                ${profile.comment ? `<div class="account-comment">${escapeHtml(profile.comment)}</div>` : ""}
+            </div>
+        </div>`;
+}
+
+function loadFollowing() {
+    const panel = document.getElementById("following-panel");
+    const list = document.getElementById("following-list");
+    if (!panel || !list) return;
+    panel.style.display = "";
+    list.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_following")}</div>`;
+    send({ cmd: "load_following" });
+}
+
+function hideFollowing() {
+    const panel = document.getElementById("following-panel");
+    if (panel) panel.style.display = "none";
+}
+
+function loadBookmarks() {
+    const panel = document.getElementById("bookmarks-panel");
+    const list = document.getElementById("account-bookmarks");
+    if (!panel || !list) return;
+    panel.style.display = "";
+    list.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_bookmarks")}</div>`;
+    send({ cmd: "load_bookmarks" });
+}
+
+function hideBookmarks() {
+    const panel = document.getElementById("bookmarks-panel");
+    if (panel) panel.style.display = "none";
+}
+
+function renderFollowingList(items) {
+    const container = document.getElementById("following-list");
+    if (!container) return;
+    if (!items.length) {
+        container.innerHTML = `<div class="empty-msg">${t("no_result")}</div>`;
+        return;
+    }
+    const rows = items
+        .map((u) => {
+            const avatarHtml = u.avatar
+                ? `<img class="following-avatar"
+                    src="/proxy_image?url=${encodeURIComponent(u.avatar)}"
+                    alt=""
+                    onerror="this.onerror=null; this.removeAttribute('src');">`
+                : '<div class="following-avatar"></div>';
+            return `<tr>
+            <td style="width:44px">${avatarHtml}</td>
+            <td>${u.id || ""}</td>
+            <td><a href="#" data-action="open-user" data-uid="${u.id}"
+                   class="user-link">${escapeHtml(u.name || "")}</a></td>
+            <td style="color:var(--text-tertiary)">${escapeHtml(u.account || "")}</td>
+        </tr>`;
+        })
+        .join("");
+    container.innerHTML = `<table>
+        <thead><tr>
+            <th></th><th>${t("th_uid")}</th>
+            <th>${t("th_name")}</th><th>${t("th_account")}</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function renderBookmarksList(items) {
+    accountBookmarksItems = items;
+    const container = document.getElementById("account-bookmarks");
+    if (!container) return;
+    if (!items.length) {
+        container.innerHTML = `<div class="empty-msg">${t("no_result")}</div>`;
+        return;
+    }
+    const rows = items
+        .map((it, idx) => {
+            let badges = "";
+            if (it.ai_generated) badges += '<span class="badge ai">AI</span>';
+            if (it.restriction) {
+                const cls = it.restriction.toLowerCase().replace("-", "");
+                badges += `<span class="badge ${cls}">${it.restriction}</span>`;
+            }
+            const titleHtml = `<a href="#" class="illust-title-link"
+            data-action="open-illust"
+            data-container="account-bookmarks"
+            data-idx="${idx}"
+            title="${t("iv_open_pixiv")}">${escapeHtml(truncate(it.title || "", 40))}</a>${badges}`;
+            const tagsHtml = (it.tags || [])
+                .slice(0, 5)
+                .map(
+                    (tag) =>
+                        `<span class="tag tag-clickable" data-action="tag-search"
+                   data-tag="${escapeHtml(tag)}">${escapeHtml(tag)}</span>`,
+                )
+                .join("");
+            return `<tr>
+            <td>${it.id}</td>
+            <td>${titleHtml}</td>
+            <td>${it.page_count || 1}</td>
+            <td>${escapeHtml(it.author || "")}</td>
+            <td style="text-align:right">${formatNum(it.bookmarks)}</td>
+            <td>${tagsHtml}</td>
+        </tr>`;
+        })
+        .join("");
+    container.innerHTML = `<table>
+        <thead><tr>
+            <th>${t("th_pid")}</th><th>${t("th_title")}</th>
+            <th>${t("th_pages")}</th><th>${t("th_author")}</th>
+            <th style="text-align:right">${t("th_bookmarks")}</th>
+            <th>${t("th_tags")}</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function renderAccountList(accounts, currentIndex) {
+    const container = document.getElementById("account-list");
+    if (!container) return;
+    if (!accounts.length) {
+        container.innerHTML = `<div class="empty-msg">${t("no_result")}</div>`;
+        return;
+    }
+    const rows = accounts
+        .map((a) => {
+            const avatarHtml = a.avatar
+                ? `<img class="account-list-avatar"
+                    src="/proxy_image?url=${encodeURIComponent(a.avatar)}"
+                    alt=""
+                    onerror="this.onerror=null; this.removeAttribute('src');">`
+                : '<div class="account-list-avatar"></div>';
+            const isCurrent = a.is_current;
+            const actions = isCurrent
+                ? `<span class="badge ai">${t("account_current")}</span>`
+                : `<button class="secondary" onclick="switchAccount(${a.index})">${t("account_switch")}</button>
+               <button class="secondary" onclick="removeAccount(${a.index})">${t("account_remove")}</button>`;
+            return `<tr class="${isCurrent ? "selected" : ""}">
+            <td style="width:44px">${avatarHtml}</td>
+            <td>${a.id || "?"}</td>
+            <td>${escapeHtml(a.name || "")}</td>
+            <td style="color:var(--text-tertiary)">${escapeHtml(a.account || "")}</td>
+            <td style="text-align:right">${actions}</td>
+        </tr>`;
+        })
+        .join("");
+    container.innerHTML = `<table>
+        <thead><tr>
+            <th></th><th>${t("th_uid")}</th><th>${t("th_name")}</th>
+            <th>${t("th_account")}</th><th style="text-align:right"></th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function switchAccount(index) {
+    send({ cmd: "switch_account", index });
+}
+
+function removeAccount(index) {
+    if (!confirm(t("account_remove_confirm"))) return;
+    send({ cmd: "remove_account", index });
+}
+
+function openAddAccountModal() {
+    const modal = document.getElementById("add-account-modal");
+    if (!modal) return;
+    const input = document.getElementById("new-account-token");
+    if (input) input.value = "";
+    modal.classList.add("show");
+}
+
+function closeAddAccountModal() {
+    const modal = document.getElementById("add-account-modal");
+    if (modal) modal.classList.remove("show");
+}
+
+function submitAddAccount() {
+    const input = document.getElementById("new-account-token");
+    if (!input) return;
+    const rt = input.value.trim();
+    if (!rt) return toast(t("toast_need_token"), "error");
+    toast(t("account_validating"), "");
+    send({ cmd: "add_account", refresh_token: rt });
+}
+
+function renderAccountBookmarks(items, container) {
+    if (!items.length) {
+        container.innerHTML = `<div class="empty-msg">${t("no_result")}</div>`;
+        return;
+    }
+    const rows = items
+        .map((it, idx) => {
+            let badges = "";
+            if (it.is_new) badges += '<span class="badge new">NEW</span>';
+            if (it.ai_generated) badges += '<span class="badge ai">AI</span>';
+            if (it.restriction) {
+                const cls = it.restriction.toLowerCase().replace("-", "");
+                badges += `<span class="badge ${cls}">${it.restriction}</span>`;
+            }
+            const titleHtml = `<a href="https://www.pixiv.net/artworks/${it.id}"
+            target="_blank" rel="noopener"
+            style="color:var(--accent); text-decoration:none;">${escapeHtml(truncate(it.title, 40))}</a>${badges}`;
+            const tagsHtml = (it.tags || [])
+                .slice(0, 5)
+                .map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`)
+                .join("");
+            return `<tr>
+            <td>${it.id}</td>
+            <td>${titleHtml}</td>
+            <td>${it.page_count || 1}</td>
+            <td>${escapeHtml(it.author)}</td>
+            <td style="text-align:right">${formatNum(it.bookmarks)}</td>
+            <td>${tagsHtml}</td>
+        </tr>`;
+        })
+        .join("");
+    container.innerHTML = `<table>
+        <thead><tr>
+            <th>${t("th_pid")}</th><th>${t("th_title")}</th>
+            <th>${t("th_pages")}</th><th>${t("th_author")}</th>
+            <th style="text-align:right">${t("th_bookmarks")}</th>
+            <th>${t("th_tags")}</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+    </table>`;
+}
+// ============ Tag click → search ============
+function onTagClick(evt, el) {
+    if (evt) evt.stopPropagation();
+    let tag = el.dataset.tag || "";
+    // Extract name only, drop translated part / 仅提取主标签名
+    const m = tag.match(/^([^(]+?)(?:\(.+\))?$/);
+    if (m) tag = m[1].trim();
+    if (!tag) return;
+
+    // Switch to search tab / 切换到搜索标签页
+    const navBtn = document.querySelector('nav button[data-tab="search"]');
+    if (navBtn) navBtn.click();
+
+    // Fill search form / 填入搜索表单
+    const tagInput = document.getElementById("search-tag");
+    if (tagInput) tagInput.value = tag;
+
+    const targetSel = document.getElementById("search-target");
+    if (targetSel) targetSel.value = "exact_match_for_tags";
+
+    // Ensure search mode is "illust" / 确保搜索模式为"作品"
+    const modeSel = document.getElementById("search-mode");
+    if (modeSel && modeSel.value !== "illust") {
+        modeSel.value = "illust";
+        onSearchModeChange();
+    }
+
+    // Close viewer modal if open / 关闭查看模态框（若已打开）
+    const modal = document.getElementById("illust-viewer-modal");
+    if (modal && modal.classList.contains("show")) {
+        closeIllustViewer();
+    }
+
+    // Trigger search / 触发搜索
+    setTimeout(() => doSearch(), 30);
+}
+// ============ Illust Viewer ============
+// Convert original → master1200 jpg / 原图转 master1200（强制 jpg）
+function originalToLarge(url) {
+    if (!url) return '';
+    const m = url.match(/^(https?:\/\/i\.pximg\.net)\/img-original\/(.+?)\.[a-zA-Z]+$/);
+    if (!m) return url;
+    const [, host, path] = m;
+    // master1200 is jpg even when original is png / master1200 即使是 png 原图也是 jpg
+    return `${host}/c/600x1200_90_webp/img-master/${path}_master1200.jpg`;
+}
+
+// Returns array of { primary, fallback } / 返回 { primary, fallback } 数组
+function getIllustPages(slim) {
+    const pages = [];
+    if (!slim) return pages;
+
+    const pageCount = slim.page_count || 1;
+    const metaPages = slim.meta_pages || [];
+    const single = slim.meta_single_page || {};
+
+    if (pageCount === 1 || metaPages.length === 0) {
+        // Single page: convert original → master1200, original as fallback
+        const orig = single.original_image_url;
+        if (orig) {
+            pages.push({
+                primary: originalToLarge(orig),
+                fallback: orig,
+            });
+        }
+    } else {
+        // Multi page: meta_pages already provides large URLs / 多页直接用 large
+        for (const p of metaPages) {
+            const im = p.image_urls || {};
+            const primary = im.large || im.medium || im.square_medium;
+            const fallback = im.original || primary;
+            if (primary) {
+                pages.push({ primary, fallback });
+            }
+        }
+    }
+    return pages;
+}
+
+
+function openIllustViewer(containerId, idx) {
+    const getter = tableItemGetters[containerId];
+    if (!getter) return;
+    const items = getter();
+    const it = items[idx];
+    if (!it) return;
+
+    ivState.containerId = containerId;
+    ivState.items = items;
+    ivState.idx = idx;
+
+    renderIllustViewer();
+    document.getElementById('illust-viewer-modal').classList.add('show');
+}
+
+function closeIllustViewer() {
+    document.getElementById('illust-viewer-modal').classList.remove('show');
+    const img = document.getElementById('iv-image');
+    if (img) img.src = '';
+}
+
+function illustViewerPrev() {
+    if (ivState.idx > 0) {
+        ivState.idx--;
+        renderIllustViewer();
+    }
+}
+
+function illustViewerNext() {
+    if (ivState.idx < ivState.items.length - 1) {
+        ivState.idx++;
+        renderIllustViewer();
+    }
+}
+
+function illustViewerPagePrev() {
+    if (ivState.pageIdx > 0) {
+        ivState.pageIdx--;
+        renderIvImage();
+    }
+}
+
+function illustViewerPageNext() {
+    if (ivState.pageIdx < ivState.pages.length - 1) {
+        ivState.pageIdx++;
+        renderIvImage();
+    }
+}
+
+function renderIllustViewer() {
+    const it = ivState.items[ivState.idx];
+    if (!it) return;
+    const slim = it._slim_illust || {};
+    const user = slim.user || {};
+
+    // Navigation / 切换控件
+    document.getElementById("iv-index").textContent =
+        `${ivState.idx + 1} / ${ivState.items.length}`;
+    document.getElementById("iv-prev").disabled = ivState.idx <= 0;
+    document.getElementById("iv-next").disabled =
+        ivState.idx >= ivState.items.length - 1;
+
+    // Image / 图像
+    ivState.pages = getIllustPages(slim);
+    ivState.pageIdx = 0;
+    renderIvImage();
+
+    // Title / 标题
+    const titleEl = document.getElementById("iv-title");
+    titleEl.textContent = it.title || "";
+    titleEl.href = `https://www.pixiv.net/artworks/${it.id}`;
+    titleEl.title = t("iv_open_pixiv");
+
+    // Badges / 徽章
+    let badges = "";
+    if (it.is_new) badges += '<span class="badge new">NEW</span>';
+    if (it.ai_generated) badges += '<span class="badge ai">AI</span>';
+    if (it.restriction) {
+        const cls = it.restriction.toLowerCase().replace("-", "");
+        badges += `<span class="badge ${cls}">${it.restriction}</span>`;
+    }
+    document.getElementById("iv-badges").innerHTML = badges;
+
+    // Stats / 统计
+    document.getElementById("iv-views").textContent = formatNum(it.views);
+    document.getElementById("iv-bookmarks").textContent = formatNum(
+        it.bookmarks,
+    );
+    document.getElementById("iv-pages").textContent = it.page_count || 1;
+    document.getElementById("iv-date").textContent = it.date || "—";
+
+    // Tags / 标签
+    const tagsHtml = (it.tags || [])
+        .map(
+            (tag) =>
+                `<span class="tag tag-clickable" data-tag="${escapeHtml(tag)}"
+               onclick="onTagClick(event, this)"
+               title="${t("tag_search_title")}">${escapeHtml(tag)}</span>`,
+        )
+        .join("");
+    document.getElementById("iv-tags").innerHTML = tagsHtml;
+
+    // User card / 用户卡片
+    renderIvUser(user, it);
+    renderIvActions(it);
+}
+
+function renderIvUser(user, it) {
+    const container = document.getElementById("iv-user-card");
+    if (!container) return;
+
+    // Fallback chain / 回退链
+    const uid = user.id || it.author_id;
+    const name = user.name || it.author || "";
+    const account = user.account || it.author_account || "";
+    const avatar =
+        (user.profile_image_urls && user.profile_image_urls.medium) ||
+        it.author_avatar ||
+        "";
+
+    // Simple onerror: clear src; container CSS shows gray circle / 最简 onerror
+    const avatarHtml = avatar
+        ? `<img class="iv-user-avatar"
+                src="/proxy_image?url=${encodeURIComponent(avatar)}"
+                alt=""
+                onerror="this.onerror=null; this.removeAttribute('src');">`
+        : '<div class="iv-user-avatar"></div>';
+
+    const nameHtml = uid
+        ? `<a class="iv-user-name" href="#"
+               data-action="open-user"
+               data-uid="${uid}"
+               title="${t("th_author_link")}">${escapeHtml(name)}</a>`
+        : `<span class="iv-user-name">${escapeHtml(name)}</span>`;
+
+    const accountHtml = account
+        ? `<div class="iv-user-account">@${escapeHtml(account)}</div>`
+        : "";
+
+    container.innerHTML = `
+        ${avatarHtml}
+        <div class="iv-user-info">
+            ${nameHtml}
+            ${accountHtml}
+        </div>`;
+}
+function renderIvActions(it) {
+    const btn = document.getElementById("iv-bookmark-btn");
+    const label = document.getElementById("iv-bookmark-label");
+    if (!btn || !label) return;
+
+    const marked = !!it.is_bookmarked;
+    btn.classList.toggle("active", marked);
+    label.textContent = marked
+        ? t("btn_pixiv_bookmarked")
+        : t("btn_pixiv_bookmark");
+}
+
+function toggleIllustBookmark() {
+    const it = ivState.items?.[ivState.idx];
+    if (!it) return;
+    const action = it.is_bookmarked ? "delete" : "add";
+    send({ cmd: "bookmark_toggle", id: it.id, action });
+}
+
+function downloadCurrentIllust() {
+    const it = ivState.items?.[ivState.idx];
+    if (!it) return;
+
+    const entry = { url: `https://www.pixiv.net/artworks/${it.id}` };
+    if (it._slim_illust) {
+        entry.metadata = { illust: it._slim_illust };
+    }
+    send({ cmd: "add_items", items: [entry] });
+    toast(t("toast_download_added"), "success");
+}
+
+function renderIvImage() {
+    const img = document.getElementById("iv-image");
+    if (!img) return;
+
+    const page = ivState.pages[ivState.pageIdx];
+
+    if (page) {
+        // Chain: primary → fallback → hide / 链式：主 → 备 → 隐藏
+        img.onerror = function () {
+            if (
+                page.fallback &&
+                page.fallback !== page.primary &&
+                img.dataset.triedFallback !== "1"
+            ) {
+                img.dataset.triedFallback = "1";
+                img.src = `/proxy_image?url=${encodeURIComponent(page.fallback)}`;
+            } else {
+                img.onerror = null;
+                img.style.display = "none";
+            }
+        };
+        img.dataset.triedFallback = "0";
+        img.src = `/proxy_image?url=${encodeURIComponent(page.primary)}`;
+        img.style.display = "";
+    } else {
+        img.onerror = null;
+        img.removeAttribute("src");
+        img.style.display = "none";
+    }
+
+    // Page navigation / 分页导航
+    const nav = document.getElementById("iv-page-nav");
+    if (!nav) return;
+    if (ivState.pages.length > 1) {
+        nav.style.display = "flex";
+        const idxEl = document.getElementById("iv-page-index");
+        if (idxEl)
+            idxEl.textContent = `${ivState.pageIdx + 1} / ${ivState.pages.length}`;
+        const prevBtn = document.getElementById("iv-page-prev");
+        const nextBtn = document.getElementById("iv-page-next");
+        if (prevBtn) prevBtn.disabled = ivState.pageIdx <= 0;
+        if (nextBtn)
+            nextBtn.disabled = ivState.pageIdx >= ivState.pages.length - 1;
+    } else {
+        nav.style.display = "none";
+    }
+}
+
+// Keyboard shortcuts / 键盘快捷键
+document.addEventListener('keydown', (e) => {
+    const modal = document.getElementById('illust-viewer-modal');
+    if (!modal || !modal.classList.contains('show')) return;
+
+    if (e.key === 'Escape') {
+        closeIllustViewer();
+    } else if (e.key === 'ArrowLeft' && !e.shiftKey) {
+        illustViewerPrev();
+    } else if (e.key === 'ArrowRight' && !e.shiftKey) {
+        illustViewerNext();
+    } else if (e.key === 'ArrowLeft' && e.shiftKey) {
+        illustViewerPagePrev();
+    } else if (e.key === 'ArrowRight' && e.shiftKey) {
+        illustViewerPageNext();
+    }
+});
+// Boot
 currentLang = detectLang();
+const savedTheme = localStorage.getItem('nagato_theme') || 'dark';
+applyTheme(savedTheme);
 applyI18n();
 renderTokenHelp();
 connect();
+
+document.querySelectorAll("nav button").forEach((btn) => {
+    btn.onclick = () => {
+        document
+            .querySelectorAll("nav button")
+            .forEach((b) => b.classList.remove("active"));
+        document
+            .querySelectorAll(".tab")
+            .forEach((t) => t.classList.remove("active"));
+        btn.classList.add("active");
+        document
+            .getElementById("tab-" + btn.dataset.tab)
+            .classList.add("active");
+
+        // Apply user background visibility / 应用用户背景图可见性
+        applyUserBgVisibility();
+
+        updateSelectionCount();
+        scheduleUiStateSave();
+    };
+});
+document.addEventListener("click", (e) => {
+    const modal = document.getElementById("illust-viewer-modal");
+    if (modal && modal.classList.contains("show") && e.target === modal) {
+        closeIllustViewer();
+    }
+});

@@ -15,15 +15,45 @@
             <span class="logo-text">Nagato</span>
         </div>
         <nav>
-            <button data-tab="recommend"><span class="ico">✨</span><span data-i18n="nav_recommend"></span></button>
-            <button data-tab="follow"><span class="ico">👥</span><span data-i18n="nav_follow"></span></button>
-            <button data-tab="ranking"><span class="ico">🏆</span><span data-i18n="nav_ranking"></span></button>
-            <button data-tab="search"><span class="ico">🔍</span><span data-i18n="nav_search"></span></button>
-            <button data-tab="user-detail"><span class="ico">📋</span><span data-i18n="nav_user_detail"></span></button>
-            <button data-tab="download"><span class="ico">⬇️</span><span data-i18n="nav_download"></span></button>
-            <button data-tab="settings"><span class="ico">⚙️</span><span data-i18n="nav_settings"></span></button>
+            <nav>
+                <button data-tab="recommend">
+                    <img class="nav-icon" src="/ui_icons/recommend.svg" alt="">
+                    <span data-i18n="nav_recommend"></span>
+                </button>
+                <button data-tab="follow">
+                    <img class="nav-icon" src="/ui_icons/follow_new.svg" alt="">
+                    <span data-i18n="nav_follow"></span>
+                </button>
+                <button data-tab="ranking">
+                    <img class="nav-icon" src="/ui_icons/ranking.svg" alt="">
+                    <span data-i18n="nav_ranking"></span>
+                </button>
+                <button data-tab="search" class="active">
+                    <img class="nav-icon" src="/ui_icons/search.svg" alt="">
+                    <span data-i18n="nav_search"></span>
+                </button>
+                <button data-tab="user-detail">
+                    <img class="nav-icon" src="/ui_icons/users.svg" alt="">
+                    <span data-i18n="nav_user_detail"></span>
+                </button>
+                <button data-tab="download">
+                    <img class="nav-icon" src="/ui_icons/download.svg" alt="">
+                    <span data-i18n="nav_download"></span>
+                </button>
+                <button data-tab="account">
+                    <img class="nav-icon" src="/ui_icons/account.svg" alt="">
+                    <span data-i18n="nav_account"></span>
+                </button>
+                <button data-tab="settings">
+                    <img class="nav-icon" src="/ui_icons/settings.svg" alt="">
+                    <span data-i18n="nav_settings"></span>
+                </button>
+            </nav>
         </nav>
         <div class="sidebar-bottom">
+            <div class="theme-toggle" onclick="toggleTheme()" title="Theme">
+                <span id="theme-icon">🌙</span>
+            </div>
             <select id="lang-switcher" onchange="switchLanguage(this.value)">
                 <option value="zh-CN">简体中文</option>
                 <option value="en">English</option>
@@ -36,9 +66,8 @@
     </aside>
 
     <main>
-        <!-- ============ Recommend ============ -->
-        <section class="tab sticky-results" id="tab-recommend">
-            <div class="panel controls">
+        <section class="tab" id="tab-recommend">
+            <div class="panel">
                 <div class="row">
                     <label data-i18n="rec_mode"></label>
                     <button class="primary" onclick="doRecommend('auto')" id="btn-rec-auto"
@@ -59,7 +88,6 @@
             </div>
         </section>
 
-        <!-- ============ Follow ============ -->
         <section class="tab sticky-results" id="tab-follow">
             <div class="panel controls">
                 <div class="row">
@@ -78,24 +106,21 @@
                     <button class="secondary" onclick="followNextPage()" data-i18n="btn_next"></button>
                     <span id="follow-page-info" style="color:#808590; font-size:12px"></span>
                 </div>
-                <div class="row">
-                    <label data-i18n="label_filter"></label>
-                    <input type="text" id="follow-filter" data-i18n-placeholder="filter_ph"
-                        style="flex:1; max-width:400px" oninput="applyFollowFilter()">
-                    <button class="secondary" onclick="clearFollowFilter()" data-i18n="btn_clear"></button>
-                    <span class="status-text" id="follow-filter-status"></span>
-                </div>
-                <div class="cloud-section" id="cloud-follow-tags">
+                <div class="cloud-section collapsed" id="cloud-follow-tags">
                     <div class="cloud-header" onclick="toggleCloud('cloud-follow-tags')">
                         <span data-i18n="label_tag_cloud"></span>
-                        <span class="cloud-toggle">▼</span>
+                        <span class="cloud-toggle">
+                            <img class="expand-icon" src="/ui_icons/expand.svg" alt="">
+                        </span>
                     </div>
                     <div class="tag-cloud" id="follow-tag-cloud"></div>
                 </div>
-                <div class="cloud-section" id="cloud-follow-authors">
+                <div class="cloud-section collapsed" id="cloud-follow-authors">
                     <div class="cloud-header" onclick="toggleCloud('cloud-follow-authors')">
                         <span data-i18n="label_author_cloud"></span>
-                        <span class="cloud-toggle">▼</span>
+                        <span class="cloud-toggle">
+                            <img class="expand-icon" src="/ui_icons/expand.svg" alt="">
+                        </span>
                     </div>
                     <div class="tag-cloud" id="follow-author-cloud"></div>
                 </div>
@@ -105,7 +130,6 @@
             </div>
         </section>
 
-        <!-- ============ Ranking ============ -->
         <section class="tab sticky-results" id="tab-ranking">
             <div class="panel controls">
                 <div class="row">
@@ -120,21 +144,18 @@
                         <option value="week_rookie" data-i18n="ranking_week_rookie"></option>
                         <option value="day_r18" data-i18n="ranking_day_r18"></option>
                     </select>
+                    <label data-i18n="label_count"></label>
+                    <span class="fixed-count">480</span>
                     <button class="primary" onclick="fetchRanking()" id="btn-fetch-ranking"
                         data-i18n="btn_fetch_ranking"></button>
                     <span class="status-text" id="ranking-status"></span>
                 </div>
-                <div class="row">
-                    <label data-i18n="label_filter"></label>
-                    <input type="text" id="ranking-filter" data-i18n-placeholder="filter_ph"
-                        style="flex:1; max-width:400px" oninput="filterRankingByTags()">
-                    <button class="secondary" onclick="clearRankingFilter()" data-i18n="btn_clear"></button>
-                    <span class="status-text" id="ranking-filter-status"></span>
-                </div>
-                <div class="cloud-section" id="cloud-ranking">
+                <div class="cloud-section collapsed" id="cloud-ranking">
                     <div class="cloud-header" onclick="toggleCloud('cloud-ranking')">
                         <span data-i18n="label_tag_cloud"></span>
-                        <span class="cloud-toggle">▼</span>
+                        <span class="cloud-toggle">
+                            <img class="expand-icon" src="/ui_icons/expand.svg" alt="">
+                        </span>
                     </div>
                     <div class="tag-cloud" id="ranking-tag-cloud"></div>
                 </div>
@@ -144,7 +165,6 @@
             </div>
         </section>
 
-        <!-- ============ Search ============ -->
         <section class="tab sticky-results" id="tab-search">
             <div class="panel controls">
                 <div class="row">
@@ -155,12 +175,16 @@
                     </select>
                 </div>
 
-                <!-- Illust search -->
                 <div id="search-pane-illust">
                     <div class="row">
                         <label data-i18n="search_tag"></label>
                         <input type="text" id="search-tag" data-i18n-placeholder="search_tag_ph"
                             style="flex:1; max-width:300px">
+                        <button class="secondary btn-with-icon" onclick="searchEncyclopedia()" id="btn-search-ext"
+                            title="萌娘百科">
+                            <img class="btn-icon" src="/ui_icons/search_ext.svg" alt="">
+                            <span data-i18n="btn_search_encyclopedia"></span>
+                        </button>
                         <label data-i18n="search_sort"></label>
                         <select id="search-sort">
                             <option value="date_desc" data-i18n="sort_newest"></option>
@@ -179,7 +203,9 @@
                     <div class="cloud-section collapsed" id="cloud-search-advanced">
                         <div class="cloud-header" onclick="toggleCloud('cloud-search-advanced')">
                             <span data-i18n="search_advanced"></span>
-                            <span class="cloud-toggle">▼</span>
+                            <span class="cloud-toggle">
+                                <img class="expand-icon" src="/ui_icons/expand.svg" alt="">
+                            </span>
                         </div>
                         <div class="search-advanced-body">
                             <div class="row">
@@ -223,14 +249,12 @@
                                 <span style="color:#808590">~</span>
                                 <input type="number" id="search-bm-max" value="0" min="0" style="width:100px"
                                     data-i18n-placeholder="search_bm_max_ph" oninput="applySearchBookmarkFilter()">
-
                                 <span class="hint-text" data-i18n="search_bookmarks_hint"></span>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- User search -->
                 <div id="search-pane-user" style="display:none">
                     <div class="row">
                         <label data-i18n="usearch_word"></label>
@@ -249,7 +273,6 @@
             </div>
         </section>
 
-        <!-- ============ User Detail ============ -->
         <section class="tab sticky-results" id="tab-user-detail">
             <div class="panel controls">
                 <div class="row">
@@ -260,17 +283,12 @@
                     <span class="status-text" id="udetail-status"></span>
                 </div>
                 <div id="udetail-header" style="margin-top:8px"></div>
-                <div class="row" style="margin-top:8px">
-                    <label data-i18n="label_filter"></label>
-                    <input type="text" id="udetail-filter" data-i18n-placeholder="filter_ph"
-                        style="flex:1; max-width:400px" oninput="applyUserDetailFilter()">
-                    <button class="secondary" onclick="clearUserDetailFilter()" data-i18n="btn_clear"></button>
-                    <span class="status-text" id="udetail-filter-status"></span>
-                </div>
-                <div class="cloud-section" id="cloud-udetail">
+                <div class="cloud-section collapsed" id="cloud-udetail">
                     <div class="cloud-header" onclick="toggleCloud('cloud-udetail')">
                         <span data-i18n="label_tag_cloud"></span>
-                        <span class="cloud-toggle">▼</span>
+                        <span class="cloud-toggle">
+                            <img class="expand-icon" src="/ui_icons/expand.svg" alt="">
+                        </span>
                     </div>
                     <div class="tag-cloud" id="udetail-tag-cloud"></div>
                 </div>
@@ -280,7 +298,6 @@
             </div>
         </section>
 
-        <!-- ============ Download ============ -->
         <section class="tab" id="tab-download">
             <div class="download-panel">
                 <div class="progress-bar-wrap">
@@ -329,7 +346,42 @@
             <button class="add-task-btn" id="btn-add-task" onclick="openAddTaskModal()" title="+">+</button>
         </section>
 
-        <!-- ============ Settings ============ -->
+        <section class="tab" id="tab-account">
+            <div class="panel account-panel">
+                <h3 data-i18n="account_title"></h3>
+                <div id="account-header">
+                    <div class="loading">
+                        <div class="spinner"></div><span data-i18n="loading_account"></span>
+                    </div>
+                </div>
+                <div class="row" style="margin-top:12px">
+                    <button class="secondary" onclick="loadAccount(true)" data-i18n="btn_refresh_account"></button>
+                </div>
+                <button class="add-task-btn" id="btn-add-account" onclick="openAddAccountModal()" title="+">+</button>
+            </div>
+
+            <div class="panel">
+                <h3 data-i18n="account_list"></h3>
+                <div id="account-list"></div>
+            </div>
+
+            <div class="panel" id="following-panel" style="display:none">
+                <div class="row" style="justify-content:space-between; align-items:center">
+                    <h3 data-i18n="account_following"></h3>
+                    <button class="secondary" onclick="hideFollowing()" data-i18n="btn_close"></button>
+                </div>
+                <div id="following-list"></div>
+            </div>
+
+            <div class="panel" id="bookmarks-panel" style="display:none">
+                <div class="row" style="justify-content:space-between; align-items:center">
+                    <h3 data-i18n="account_bookmarks"></h3>
+                    <button class="secondary" onclick="hideBookmarks()" data-i18n="btn_close"></button>
+                </div>
+                <div id="account-bookmarks"></div>
+            </div>
+        </section>
+
         <section class="tab" id="tab-settings">
             <div class="panel">
                 <h3 data-i18n="settings_account"></h3>
@@ -346,6 +398,13 @@
                         <option value="auto" data-i18n="lang_auto"></option>
                         <option value="zh-CN">简体中文</option>
                         <option value="en">English</option>
+                    </select>
+                </div>
+                <div class="row">
+                    <label class="label-wide" data-i18n="settings_theme"></label>
+                    <select id="cfg-theme" style="flex:1">
+                        <option value="dark" data-i18n="theme_dark"></option>
+                        <option value="light" data-i18n="theme_light"></option>
                     </select>
                 </div>
                 <div class="row">
@@ -380,55 +439,69 @@
                 </div>
             </div>
         </section>
-        <div class="modal-overlay" id="add-task-modal">
-            <div class="modal-content" style="max-width:640px">
-                <button class="modal-close" onclick="closeAddTaskModal()">×</button>
-                <h3 style="color:#7eb6ff; margin-bottom:16px" data-i18n="dl_add_task"></h3>
+    </main>
 
-                <div class="add-task-tabs">
-                    <button class="add-task-tab active" onclick="switchAddTaskTab('manual')"
-                        data-i18n="dl_add_manual"></button>
-                    <button class="add-task-tab" onclick="switchAddTaskTab('bookmark')"
-                        data-i18n="dl_add_bookmark"></button>
+    <!-- ============ Illust Viewer Modal ============ -->
+    <div class="modal-overlay" id="illust-viewer-modal">
+        <div class="modal-content illust-viewer-content">
+            <button class="modal-close" onclick="closeIllustViewer()">×</button>
+
+            <div class="illust-viewer-nav">
+                <button class="secondary" id="iv-prev" onclick="illustViewerPrev()" data-i18n="iv_prev"></button>
+                <span class="iv-index" id="iv-index">0 / 0</span>
+                <button class="secondary" id="iv-next" onclick="illustViewerNext()" data-i18n="iv_next"></button>
+            </div>
+
+            <div class="illust-viewer-body">
+                <!-- Left: image + page navigation -->
+                <div class="illust-viewer-left">
+                    <div class="iv-image-wrap">
+                        <img id="iv-image" class="iv-image" src="" alt="">
+                    </div>
+                    <div class="iv-page-nav" id="iv-page-nav">
+                        <button class="secondary" id="iv-page-prev" onclick="illustViewerPagePrev()">◀</button>
+                        <span class="iv-page-index" id="iv-page-index">1 / 1</span>
+                        <button class="secondary" id="iv-page-next" onclick="illustViewerPageNext()">▶</button>
+                    </div>
                 </div>
 
-                <div class="add-task-pane active" id="add-task-manual">
-                    <div class="row">
-                        <input type="text" id="manual-url" data-i18n-placeholder="manual_url_ph" style="flex:1">
-                        <button class="primary" onclick="addSingleUrl()" data-i18n="btn_enqueue"></button>
+                <!-- Right: info -->
+                <div class="illust-viewer-right">
+                    <div class="iv-section">
+                        <a class="iv-title" id="iv-title" href="#" target="_blank" rel="noopener"></a>
+                        <div class="iv-badges" id="iv-badges"></div>
                     </div>
-                    <div class="row" style="flex-direction:column; align-items:stretch">
-                        <label data-i18n="manual_batch" style="margin-bottom:6px"></label>
-                        <textarea id="manual-batch" rows="6"></textarea>
-                    </div>
-                    <div class="row" style="justify-content:flex-end">
-                        <button class="primary" onclick="addBatchUrls()" data-i18n="btn_batch_enqueue"></button>
-                    </div>
-                </div>
 
-                <div class="add-task-pane" id="add-task-bookmark">
-                    <div class="row">
-                        <input type="file" id="bookmark-file" accept=".html,.htm">
-                        <button class="primary" onclick="parseBookmark()" data-i18n="btn_parse"></button>
+                    <div class="iv-stats">
+                        <div><span data-i18n="th_views"></span>: <b id="iv-views">-</b></div>
+                        <div><span data-i18n="th_bookmarks"></span>: <b id="iv-bookmarks">-</b></div>
+                        <div><span data-i18n="th_pages"></span>: <b id="iv-pages">-</b></div>
+                        <div><span data-i18n="th_date"></span>: <b id="iv-date">-</b></div>
                     </div>
-                    <div id="bookmark-preview" style="margin-top:10px; max-height:240px; overflow-y:auto;
-                                font-family:monospace; font-size:12px;"></div>
-                    <div class="row" style="margin-top:10px; justify-content:flex-end">
-                        <button class="primary" onclick="addBookmarkUrls()" id="bookmark-add-btn" disabled
-                            data-i18n="btn_enqueue_all"></button>
+
+                    <div class="iv-tags" id="iv-tags"></div>
+
+                    <div class="iv-user-card" id="iv-user-card"></div>
+                    <div class="iv-actions" id="iv-actions">
+                        <button class="iv-action-btn" id="iv-bookmark-btn" onclick="toggleIllustBookmark()">
+                            <img class="btn-icon" src="/ui_icons/bookmark_pixiv.svg" alt="">
+                            <span id="iv-bookmark-label" data-i18n="btn_pixiv_bookmark"></span>
+                        </button>
+                        <button class="iv-action-btn" onclick="downloadCurrentIllust()">
+                            <img class="btn-icon" src="/ui_icons/download.svg" alt="">
+                            <span data-i18n="btn_download"></span>
+                        </button>
                     </div>
                 </div>
             </div>
         </div>
-    </main>
-
-    <!-- ============ Float Ball ============ -->
+    </div>
     <div class="float-ball" id="float-ball" onclick="onFloatBallClick()">
         <span class="ball-icon">⬇</span>
         <span class="ball-count" id="ball-count">0</span>
     </div>
 
-    <!-- ============ Advanced Recommend Modal ============ -->
+    <!-- Advanced Recommend Modal -->
     <div class="modal-overlay" id="advanced-rec-modal">
         <div class="modal-content" style="max-width:700px">
             <button class="modal-close" onclick="closeAdvancedRecommend()">×</button>
@@ -463,7 +536,61 @@
         </div>
     </div>
 
-    <!-- ============ Token Help Modal ============ -->
+    <!-- Add Task Modal -->
+    <div class="modal-overlay" id="add-task-modal">
+        <div class="modal-content" style="max-width:640px">
+            <button class="modal-close" onclick="closeAddTaskModal()">×</button>
+            <h3 style="color:#7eb6ff; margin-bottom:16px" data-i18n="dl_add_task"></h3>
+            <div class="add-task-tabs">
+                <button class="add-task-tab active" onclick="switchAddTaskTab('manual')"
+                    data-i18n="dl_add_manual"></button>
+                <button class="add-task-tab" onclick="switchAddTaskTab('bookmark')"
+                    data-i18n="dl_add_bookmark"></button>
+            </div>
+            <div class="add-task-pane active" id="add-task-manual">
+                <div class="row">
+                    <input type="text" id="manual-url" data-i18n-placeholder="manual_url_ph" style="flex:1">
+                    <button class="primary" onclick="addSingleUrl()" data-i18n="btn_enqueue"></button>
+                </div>
+                <div class="row" style="flex-direction:column; align-items:stretch">
+                    <label data-i18n="manual_batch" style="margin-bottom:6px"></label>
+                    <textarea id="manual-batch" rows="6"></textarea>
+                </div>
+                <div class="row" style="justify-content:flex-end">
+                    <button class="primary" onclick="addBatchUrls()" data-i18n="btn_batch_enqueue"></button>
+                </div>
+            </div>
+            <div class="add-task-pane" id="add-task-bookmark">
+                <div class="row">
+                    <input type="file" id="bookmark-file" accept=".html,.htm">
+                    <button class="primary" onclick="parseBookmark()" data-i18n="btn_parse"></button>
+                </div>
+                <div id="bookmark-preview" style="margin-top:10px; max-height:240px; overflow-y:auto;
+                        font-family:monospace; font-size:12px;"></div>
+                <div class="row" style="margin-top:10px; justify-content:flex-end">
+                    <button class="primary" onclick="addBookmarkUrls()" id="bookmark-add-btn" disabled
+                        data-i18n="btn_enqueue_all"></button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-overlay" id="add-account-modal">
+        <div class="modal-content" style="max-width:560px">
+            <button class="modal-close" onclick="closeAddAccountModal()">×</button>
+            <h3 style="color:var(--accent); margin-bottom:16px" data-i18n="account_add_title"></h3>
+            <div class="row" style="flex-direction:column; align-items:stretch">
+                <label data-i18n="settings_token" style="margin-bottom:6px"></label>
+                <input type="text" id="new-account-token" data-i18n-placeholder="token_ph" style="width:100%">
+            </div>
+            <div class="adv-hint" data-i18n="account_add_hint"></div>
+            <div class="row" style="margin-top:16px; justify-content:flex-end">
+                <button class="secondary" onclick="closeAddAccountModal()" data-i18n="btn_cancel"></button>
+                <button class="primary" onclick="submitAddAccount()" data-i18n="btn_add_account"></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Token Help Modal -->
     <div class="modal-overlay" id="token-help-modal">
         <div class="modal-content" style="max-width:640px">
             <button class="modal-close" onclick="closeTokenHelp()">×</button>
