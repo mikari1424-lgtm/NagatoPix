@@ -300,48 +300,56 @@
 
         <section class="tab" id="tab-download">
             <div class="download-panel">
-                <div class="progress-bar-wrap">
+                <!-- Progress summary / 进度摘要 -->
+                <div class="dl-summary">
+                    <div class="dl-summary-line">
+                        <span class="dl-pct" id="dl-pct">0.0%</span>
+                        <span class="dl-dot">·</span>
+                        <span class="dl-remaining" id="dl-remaining">0 remaining</span>
+                    </div>
                     <div class="progress-bar">
                         <div class="progress-fill" id="progress-fill"></div>
                     </div>
-                    <div class="progress-text" id="progress-text">0 / 0</div>
-                </div>
-                <div class="download-stats">
-                    <div class="stat-item">
-                        <div class="stat-label" data-i18n="dl_pending"></div>
-                        <div class="stat-value" id="dl-pending">0</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label" data-i18n="dl_processed"></div>
-                        <div class="stat-value" id="dl-processed">0</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label" data-i18n="dl_failed"></div>
-                        <div class="stat-value" id="dl-failed">0</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label" data-i18n="dl_workers"></div>
-                        <div class="stat-value" id="dl-workers">0</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label" data-i18n="dl_status"></div>
-                        <div class="stat-value" id="dl-status">—</div>
+                    <div class="dl-summary-line secondary">
+                        <span class="dl-failed" id="dl-failed-line">0 failed</span>
+                        <span class="dl-dot">·</span>
+                        <span class="dl-status" id="dl-status">Idle</span>
                     </div>
                 </div>
-                <div class="download-controls">
-                    <label data-i18n="dl_preset"></label>
-                    <select id="dl-preset" onchange="onPresetChange()">
-                        <option value="normal" data-i18n="dl_preset_normal"></option>
-                        <option value="high" data-i18n="dl_preset_high"></option>
-                    </select>
-                    <label data-i18n="dl_threads"></label>
-                    <input type="number" id="dl-threads" min="1" max="8" value="3" onchange="onThreadsChange()">
+        
+                <!-- Controls row: fold toggle (left) + actions (right) -->
+                <div class="dl-controls-row">
+                    <button class="secondary btn-with-icon" onclick="toggleDownloadItems()" id="btn-toggle-items">
+                        <img class="expand-icon" id="dl-items-expand-icon" src="/ui_icons/expand.svg" alt="">
+                        <span data-i18n="dl_view_items"></span>
+                        <span class="dl-items-count" id="dl-items-count">(0)</span>
+                    </button>
+                    <div class="dl-actions-right">
+                        <label data-i18n="dl_preset"></label>
+                        <select id="dl-preset" onchange="onPresetChange()">
+                            <option value="normal" data-i18n="dl_preset_normal"></option>
+                            <option value="high" data-i18n="dl_preset_high"></option>
+                        </select>
+                        <label data-i18n="dl_threads"></label>
+                        <input type="number" id="dl-threads" min="1" max="8" value="3" onchange="onThreadsChange()"
+                            style="width:70px">
+                        <button class="secondary" onclick="clearQueue()" data-i18n="btn_clear_queue"></button>
+                        <button class="secondary" id="btn-stop" onclick="stopQueue()" data-i18n="btn_stop"></button>
+                    </div>
                 </div>
-                <div class="download-actions">
-                    <button class="secondary" onclick="clearQueue()" data-i18n="btn_clear_queue"></button>
-                    <button class="secondary" id="btn-stop" onclick="stopQueue()" data-i18n="btn_stop"></button>
+        
+                <!-- Items list (collapsible) / 下载项列表 -->
+                <div class="dl-items-wrap" id="dl-items-wrap" style="display:none">
+                    <div class="dl-items-header">
+                        <span data-i18n="th_pid"></span>
+                        <span data-i18n="dl_item_title"></span>
+                        <span data-i18n="dl_item_status"></span>
+                        <span data-i18n="dl_item_progress"></span>
+                    </div>
+                    <div class="dl-items-list" id="dl-items-list"></div>
                 </div>
             </div>
+        
             <button class="add-task-btn" id="btn-add-task" onclick="openAddTaskModal()" title="+">+</button>
         </section>
 

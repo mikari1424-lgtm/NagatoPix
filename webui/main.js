@@ -40,6 +40,8 @@ let ivState = {
     pages: [],
     pageIdx: 0,
 };
+let queueItems = []; // server-pushed item statuses / 后端推送的项状态
+let dlItemsExpanded = false;
 
 const tableItemGetters = {
     "ranking-list": () => rankingItems,
@@ -92,6 +94,10 @@ function handleMessage(msg) {
             updateQueueStatus(msg);
             if (msg.ui_state) restoreUiState(msg.ui_state);
             if (msg.config.theme) applyTheme(msg.config.theme);
+            if (msg.items) {
+                queueItems = msg.items;
+                renderQueueItems();
+            }
             break;
         case "theme_set":
             applyTheme(msg.theme);
@@ -301,6 +307,10 @@ function handleMessage(msg) {
                 }
             }
             break;
+        case "queue_items":
+            queueItems = msg.items || [];
+            renderQueueItems();
+            break;
     }
 }
 
@@ -464,10 +474,20 @@ function updateQueueStatus(payload) {
     const stopping = payload.stopping || false;
     const mode = payload.mode || "normal";
     const workers = payload.workers || 1;
+    const retryPass = payload.retry_pass || 0;
+    const maxRetry = payload.max_retry || 3;
 
-    lastQueueState = { queue: q, failed: f, processed: p, running, stopping };
+    lastQueueState = {
+        queue: q,
+        failed: f,
+        processed: p,
+        running,
+        stopping,
+        retryPass,
+        maxRetry,
+    };
 
-    // Float ball
+    // Float ball / 悬浮球
     const ball = document.getElementById("float-ball");
     const selCount = getSelectionCount();
     if (selCount > 0) {
@@ -477,18 +497,44 @@ function updateQueueStatus(payload) {
         ball.classList.remove("show");
     }
 
-    // Download tab
+    // Progress summary / 进度摘要
     const total = q + p;
     const pct = total > 0 ? (p / total) * 100 : 0;
-    document.getElementById("progress-fill").style.width = pct + "%";
-    document.getElementById("progress-text").textContent = `${p} / ${total}`;
-    document.getElementById("dl-pending").textContent = q;
-    document.getElementById("dl-processed").textContent = p;
-    document.getElementById("dl-failed").textContent = f;
-    document.getElementById("dl-workers").textContent = workers;
-    updateDownloadStatusText();
+    const fill = document.getElementById("progress-fill");
+    if (fill) fill.style.width = pct.toFixed(1) + "%";
 
-    // Download controls
+    const pctEl = document.getElementById("dl-pct");
+    if (pctEl) pctEl.textContent = pct.toFixed(1) + "%";
+
+    const remEl = document.getElementById("dl-remaining");
+    if (remEl) remEl.textContent = t("dl_remaining_fmt", q);
+
+    const failEl = document.getElementById("dl-failed-line");
+    if (failEl) {
+        failEl.textContent = t("dl_failed_fmt", f);
+        failEl.style.color = f > 0 ? "var(--error)" : "";
+    }
+
+    const statusEl = document.getElementById("dl-status");
+    if (statusEl) {
+        if (stopping) {
+            statusEl.textContent = t("dl_status_stopping");
+        } else if (running) {
+            if (retryPass > 0) {
+                statusEl.textContent = t(
+                    "dl_status_retry",
+                    retryPass,
+                    maxRetry,
+                );
+            } else {
+                statusEl.textContent = t("dl_status_running");
+            }
+        } else {
+            statusEl.textContent = t("dl_status_idle");
+        }
+    }
+
+    // Controls / 控件
     const presetSel = document.getElementById("dl-preset");
     if (presetSel) presetSel.value = mode;
     const threadsInput = document.getElementById("dl-threads");
@@ -503,7 +549,6 @@ function updateQueueStatus(payload) {
         btnStop.textContent = stopping ? t("btn_stopping") : t("btn_stop");
     }
 
-    // Add-queue button disabled while running? Actually allow (they just add to queue)
     document.querySelectorAll(".add-queue-btn").forEach((btn) => {
         if (btn.id === "bookmark-add-btn") {
             btn.disabled = parsedBookmarkUrls.length === 0;
@@ -513,6 +558,82 @@ function updateQueueStatus(payload) {
     updateSelectionCount();
 }
 
+function toggleDownloadItems() {
+    dlItemsExpanded = !dlItemsExpanded;
+    const wrap = document.getElementById("dl-items-wrap");
+    const icon = document.getElementById("dl-items-expand-icon");
+    if (wrap) wrap.style.display = dlItemsExpanded ? "flex" : "none";
+    if (icon) icon.style.transform = dlItemsExpanded ? "" : "rotate(-90deg)";
+    if (dlItemsExpanded) renderQueueItems();
+}
+
+function renderQueueItems() {
+    const list = document.getElementById("dl-items-list");
+    const countEl = document.getElementById("dl-items-count");
+    if (countEl) countEl.textContent = `(${queueItems.length})`;
+    if (!list) return;
+
+    if (!queueItems.length) {
+        list.innerHTML = `<div class="empty-msg" style="padding:20px">${t("no_result")}</div>`;
+        return;
+    }
+
+    const rows = queueItems
+        .map((it) => {
+            const pid = it.pid || "—";
+            const title = it.title || "";
+            const titleHtml = title
+                ? `<a href="https://www.pixiv.net/artworks/${pid}"
+                  target="_blank" rel="noopener"
+                  class="dl-item-title"
+                  title="${escapeHtml(title)}">${escapeHtml(title)}</a>`
+                : `<span class="dl-item-title empty">—</span>`;
+
+            const status = it.status || "pending";
+            const stage = it.stage || "";
+            let statusText = t(`dl_item_status_${status}`) || status;
+            if (status === "processing" && stage) {
+                statusText = t(`dl_stage_${stage}`) || statusText;
+            }
+            const statusClass =
+                status === "processing"
+                    ? "processing"
+                    : status === "success"
+                      ? "success"
+                      : status === "failed"
+                        ? "failed"
+                        : "";
+
+            const progress = it.progress || 0;
+            const progressClass =
+                status === "success"
+                    ? "success"
+                    : status === "failed"
+                      ? "failed"
+                      : "";
+            const errorAttr = it.error
+                ? ` class="dl-item-error" title="${escapeHtml(it.error)}"`
+                : "";
+
+            return `<div class="dl-item">
+            <span class="dl-item-pid">${pid}</span>
+            ${titleHtml}
+            <span class="dl-item-status ${statusClass}"${errorAttr}>
+                ${escapeHtml(statusText)}
+            </span>
+            <div class="dl-item-progress ${progressClass}">
+                <div class="dl-item-progress-bar">
+                    <div class="dl-item-progress-fill"
+                         style="width:${Math.min(100, Math.max(0, progress))}%"></div>
+                </div>
+                <span class="dl-item-progress-text">${progress}%</span>
+            </div>
+        </div>`;
+        })
+        .join("");
+
+    list.innerHTML = rows;
+}
 function updateDownloadStatusText() {
     const el = document.getElementById("dl-status");
     if (!el) return;
@@ -816,49 +937,53 @@ function renderTable(containerId, items) {
     updateSelectionCount();
 }
 // ============ Table event delegation ============
-document.addEventListener('click', (e) => {
-    const target = e.target.closest('[data-action]');
-    if (!target) return;
+document.addEventListener(
+    "click",
+    (e) => {
+        const target = e.target.closest("[data-action]");
+        if (!target) return;
 
-    const action = target.dataset.action;
+        const action = target.dataset.action;
 
-    // 1) Checkbox — toggle selection / 复选框：切换选中
-    if (action === 'toggle-checkbox') {
-        e.preventDefault();
-        e.stopPropagation();
-        const containerId = target.dataset.container;
-        const idx = parseInt(target.dataset.idx, 10);
-        onCheckboxClick(e, containerId, idx);
-        return;
-    }
+        // 1) Checkbox — toggle selection / 复选框：切换选中
+        if (action === "toggle-checkbox") {
+            e.preventDefault();
+            e.stopPropagation();
+            const containerId = target.dataset.container;
+            const idx = parseInt(target.dataset.idx, 10);
+            onCheckboxClick(e, containerId, idx);
+            return;
+        }
 
-    // 2) Title — open illust viewer modal / 标题：打开查看模态框
-    if (action === 'open-illust') {
-        e.preventDefault();
-        e.stopPropagation();
-        const containerId = target.dataset.container;
-        const idx = parseInt(target.dataset.idx, 10);
-        openIllustViewer(containerId, idx);
-        return;
-    }
+        // 2) Title — open illust viewer modal / 标题：打开查看模态框
+        if (action === "open-illust") {
+            e.preventDefault();
+            e.stopPropagation();
+            const containerId = target.dataset.container;
+            const idx = parseInt(target.dataset.idx, 10);
+            openIllustViewer(containerId, idx);
+            return;
+        }
 
-    // 3) Author — open user detail / 作者：打开用户详情
-    if (action === 'open-user') {
-        e.preventDefault();
-        e.stopPropagation();
-        const uid = parseInt(target.dataset.uid, 10);
-        if (uid) openUserDetail(uid);
-        return;
-    }
+        // 3) Author — open user detail / 作者：打开用户详情
+        if (action === "open-user") {
+            e.preventDefault();
+            e.stopPropagation();
+            const uid = parseInt(target.dataset.uid, 10);
+            if (uid) openUserDetail(uid);
+            return;
+        }
 
-    // 4) Tag — search this tag / 标签：搜索
-    if (action === 'tag-search') {
-        e.preventDefault();
-        e.stopPropagation();
-        onTagClick(e, target);
-        return;
-    }
-}, true);
+        // 4) Tag — search this tag / 标签：搜索
+        if (action === "tag-search") {
+            e.preventDefault();
+            e.stopPropagation();
+            onTagClick(e, target);
+            return;
+        }
+    },
+    true,
+);
 
 function toggleRow(tr) {
     tr.classList.toggle("selected");
@@ -896,13 +1021,6 @@ function onCheckboxClick(evt, containerId, idx) {
     lastCheckedIdx[containerId] = idx;
     updateSelectionCount();
     scheduleUiStateSave();
-}
-
-function updateCheckboxIcon(row) {
-    const cb = row.querySelector(".row-checkbox");
-    if (!cb) return;
-    const isSelected = row.classList.contains("selected");
-    cb.src = isSelected ? "/ui_icons/selected.svg" : "/ui_icons/unselected.svg";
 }
 
 function updateCheckboxIcon(row) {
@@ -1446,8 +1564,8 @@ function renderUserHeaderOnly(user) {
 function toggleFollow() {
     if (!currentUserDetail) return;
     const uid = currentUserDetail.id;
-    const action = currentUserDetail.is_followed ? 'unfollow' : 'follow';
-    send({cmd: 'follow_user', uid, action});
+    const action = currentUserDetail.is_followed ? "unfollow" : "follow";
+    send({ cmd: "follow_user", uid, action });
 }
 
 function applyUserBgVisibility() {
@@ -1911,16 +2029,17 @@ function onFloatBallClick() {
 }
 // ============ Theme ============
 function applyTheme(theme) {
-    document.documentElement.setAttribute('data-theme', theme);
-    document.getElementById('theme-icon').textContent = theme === 'dark' ? '🌙' : '☀️';
-    localStorage.setItem('nagato_theme', theme);
+    document.documentElement.setAttribute("data-theme", theme);
+    document.getElementById("theme-icon").textContent =
+        theme === "dark" ? "🌙" : "☀️";
+    localStorage.setItem("nagato_theme", theme);
 }
 
 function toggleTheme() {
-    const cur = document.documentElement.getAttribute('data-theme') || 'dark';
-    const next = cur === 'dark' ? 'light' : 'dark';
+    const cur = document.documentElement.getAttribute("data-theme") || "dark";
+    const next = cur === "dark" ? "light" : "dark";
     applyTheme(next);
-    send({cmd: 'set_theme', theme: next});
+    send({ cmd: "set_theme", theme: next });
 }
 // Saving States
 let uiStateSaveTimer = null;
@@ -2347,8 +2466,10 @@ function onTagClick(evt, el) {
 // ============ Illust Viewer ============
 // Convert original → master1200 jpg / 原图转 master1200（强制 jpg）
 function originalToLarge(url) {
-    if (!url) return '';
-    const m = url.match(/^(https?:\/\/i\.pximg\.net)\/img-original\/(.+?)\.[a-zA-Z]+$/);
+    if (!url) return "";
+    const m = url.match(
+        /^(https?:\/\/i\.pximg\.net)\/img-original\/(.+?)\.[a-zA-Z]+$/,
+    );
     if (!m) return url;
     const [, host, path] = m;
     // master1200 is jpg even when original is png / master1200 即使是 png 原图也是 jpg
@@ -2387,7 +2508,6 @@ function getIllustPages(slim) {
     return pages;
 }
 
-
 function openIllustViewer(containerId, idx) {
     const getter = tableItemGetters[containerId];
     if (!getter) return;
@@ -2400,13 +2520,13 @@ function openIllustViewer(containerId, idx) {
     ivState.idx = idx;
 
     renderIllustViewer();
-    document.getElementById('illust-viewer-modal').classList.add('show');
+    document.getElementById("illust-viewer-modal").classList.add("show");
 }
 
 function closeIllustViewer() {
-    document.getElementById('illust-viewer-modal').classList.remove('show');
-    const img = document.getElementById('iv-image');
-    if (img) img.src = '';
+    document.getElementById("illust-viewer-modal").classList.remove("show");
+    const img = document.getElementById("iv-image");
+    if (img) img.src = "";
 }
 
 function illustViewerPrev() {
@@ -2614,25 +2734,25 @@ function renderIvImage() {
 }
 
 // Keyboard shortcuts / 键盘快捷键
-document.addEventListener('keydown', (e) => {
-    const modal = document.getElementById('illust-viewer-modal');
-    if (!modal || !modal.classList.contains('show')) return;
+document.addEventListener("keydown", (e) => {
+    const modal = document.getElementById("illust-viewer-modal");
+    if (!modal || !modal.classList.contains("show")) return;
 
-    if (e.key === 'Escape') {
+    if (e.key === "Escape") {
         closeIllustViewer();
-    } else if (e.key === 'ArrowLeft' && !e.shiftKey) {
+    } else if (e.key === "ArrowLeft" && !e.shiftKey) {
         illustViewerPrev();
-    } else if (e.key === 'ArrowRight' && !e.shiftKey) {
+    } else if (e.key === "ArrowRight" && !e.shiftKey) {
         illustViewerNext();
-    } else if (e.key === 'ArrowLeft' && e.shiftKey) {
+    } else if (e.key === "ArrowLeft" && e.shiftKey) {
         illustViewerPagePrev();
-    } else if (e.key === 'ArrowRight' && e.shiftKey) {
+    } else if (e.key === "ArrowRight" && e.shiftKey) {
         illustViewerPageNext();
     }
 });
 // Boot
 currentLang = detectLang();
-const savedTheme = localStorage.getItem('nagato_theme') || 'dark';
+const savedTheme = localStorage.getItem("nagato_theme") || "dark";
 applyTheme(savedTheme);
 applyI18n();
 renderTokenHelp();

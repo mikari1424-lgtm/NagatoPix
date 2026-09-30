@@ -903,6 +903,14 @@ class DownloadWorker:
         self._retry_pass = 0                 # NEW: auto-retry counter / 自动重试计数器
         self._max_retry_passes = 3           # NEW: max auto-retry rounds / 最大自动重试轮次
 
+        # Per-item status tracking / 单项状态追踪
+        self.items_status = {}          # pid -> {status, title, stage, progress, ts}
+        self._items_lock = threading.Lock()
+        self._items_max = 300           # keep last N entries / 最多保留 N 项
+
+        self.status_callback = None
+        self.items_callback = None      # callback for items updates / 状态更新回调
+
     def set_status_callback(self, cb):
         self.status_callback = cb
 
@@ -910,6 +918,45 @@ class DownloadWorker:
         write_log(msg, level)
         if self.status_callback:
             self.status_callback(msg, level)
+
+    def _update_item_status(self, pid, **fields):
+        if pid is None:
+            return
+        with self._items_lock:
+            cur = self.items_status.get(pid, {})
+            cur.update(fields)
+            cur['ts'] = time.time()
+            self.items_status[pid] = cur
+            # Trim old finished entries / 裁剪已完成的旧项
+            if len(self.items_status) > self._items_max:
+                sorted_items = sorted(
+                    self.items_status.items(),
+                    key=lambda x: x[1].get('ts', 0)
+                )
+                for k, v in sorted_items:
+                    if v.get('status') in ('success', 'failed'):
+                        self.items_status.pop(k, None)
+                        if len(self.items_status) <= self._items_max:
+                            break
+        self._emit_items_update()
+
+    def _emit_items_update(self):
+        if not self.items_callback:
+            return
+        with self._items_lock:
+            snapshot = [
+                {'pid': pid, **info}
+                for pid, info in self.items_status.items()
+            ]
+        # Sort: processing first, then by ts desc / 排序：进行中优先
+        snapshot.sort(key=lambda x: (
+            0 if x.get('status') == 'processing' else 1,
+            -x.get('ts', 0)
+        ))
+        try:
+            self.items_callback(snapshot)
+        except Exception:
+            pass
 
     def _current_workers(self) -> int:
         mode = self.config.get("download_mode", "normal")
@@ -947,10 +994,12 @@ class DownloadWorker:
             return False
 
     def add_items(self, items: list):
-        # New batch when queue previously empty / 队列此前为空视为新批次
         if self.processed_count > 0 and self.url_queue.empty() and not self.is_running:
             self.processed_count = 0
             self._retry_pass = 0
+            with self._items_lock:
+                self.items_status = {}
+            self._emit_items_update()
 
         n = 0
         for it in items:
@@ -1001,6 +1050,13 @@ class DownloadWorker:
                 self.url_queue.get_nowait()
             except queue.Empty:
                 break
+        # Clear item statuses for pending items / 清空待处理项状态
+        with self._items_lock:
+            self.items_status = {
+                pid: info for pid, info in self.items_status.items()
+                if info.get('status') == 'processing'
+            }
+        self._emit_items_update()
         self._emit(t('queue_cleared', n=n), 'info')
         self._save_queue()
         return n
@@ -1056,16 +1112,24 @@ class DownloadWorker:
                 cached = item.get('metadata')
                 self._emit(t('processing', url=url,
                              remaining=self.url_queue.qsize()), 'info')
+                # Try to extract pid early / 尝试提前解析 pid
+                try:
+                    _, early_pid = self._parse_url(url)
+                except Exception:
+                    early_pid = None
+
                 ok, pid, img_path, meta_d = self._process_url(url, cached_meta=cached)
                 if ok:
                     self._emit(t('task_success', url=url), 'info')
                 else:
                     self._emit(t('task_failed', url=url), 'error')
-                    # Record for auto-retry regardless of img_path
-                    # / 无论 img_path 是否存在都记录，供自动重试
                     if meta_d:
                         with self.failed_lock:
                             self.failed_items.append((pid, img_path, meta_d))
+                    # Ensure status is marked failed / 确保状态标记失败
+                    if pid is not None:
+                        self._update_item_status(
+                            pid, status='failed', stage='error', error='task_failed')
 
             self.processed_count += 1
             self._save_queue()
@@ -1086,7 +1150,6 @@ class DownloadWorker:
                     self._save_queue()
                     self.start()
                 elif has_failed and self._retry_pass < self._max_retry_passes:
-                    # Auto-retry pass / 自动重试轮次
                     self._retry_pass += 1
                     with self.failed_lock:
                         retry_items = list(self.failed_items)
@@ -1094,10 +1157,12 @@ class DownloadWorker:
                     for pid, img_path, meta_d in retry_items:
                         retry_url = f"https://www.pixiv.net/artworks/{pid}"
                         self.url_queue.put({'url': retry_url})
+                        self._update_item_status(
+                            pid, status='pending', stage='retry',
+                            progress=0, error='')
                     self._emit(
                         f"Auto-retry pass {self._retry_pass}/{self._max_retry_passes}: "
-                        f"{len(retry_items)} items",
-                        'warn')
+                        f"{len(retry_items)} items", 'warn')
                     self.start()
                 else:
                     if not has_remaining and not has_failed:
@@ -1129,7 +1194,9 @@ class DownloadWorker:
         raise ValueError(url)
 
     def _process_illust(self, iid, cached_meta=None):
-        # Reuse cached illust metadata if available / 若有缓存元数据则复用
+        self._update_item_status(iid, status='processing', stage='fetching',
+                                 progress=0, title='', error='')
+
         if cached_meta and cached_meta.get('illust'):
             info = cached_meta['illust']
             write_log(f"Using cached metadata for {iid}", 'info')
@@ -1137,9 +1204,13 @@ class DownloadWorker:
             info = self.api.get_illust_detail(iid)
         if not info:
             write_log(t('illust_fetch_failed', id=iid), 'warn')
+            self._update_item_status(iid, status='failed', stage='fetch',
+                                     progress=0, error='fetch_failed')
             return False, iid, None, None
         if not info.get('visible', False):
             write_log(t('illust_invisible', id=iid), 'warn')
+            self._update_item_status(iid, status='failed', stage='invisible',
+                                     progress=0, error='invisible')
             return False, iid, None, None
 
         title = info.get('title', '')
@@ -1204,8 +1275,10 @@ class DownloadWorker:
             write_log(t('no_image_url', id=iid), 'warn')
             return False, iid, None, metadata
 
+        # 下载每页 / Download each page
         saved = []
-        for u in urls:
+        total = len(urls)
+        for idx, u in enumerate(urls):
             base = u.split('?')[0]
             fname = os.path.basename(base)
             if not fname:
@@ -1215,19 +1288,43 @@ class DownloadWorker:
             if sp.exists():
                 write_log(t('file_exists', path=str(sp)), 'info')
                 saved.append(sp)
+                self._update_item_status(
+                    iid, stage='downloading',
+                    progress=int(5 + (idx + 1) / total * 80))
                 continue
+
             write_log(t('downloading', url=u, path=str(sp)), 'info')
+            self._update_item_status(
+                iid, stage='downloading',
+                progress=int(5 + idx / total * 80))
+
             if self.api.download_image(u, sp):
                 write_log(t('download_done', path=str(sp)), 'info')
+                self._update_item_status(
+                    iid, stage='writing_meta',
+                    progress=int(5 + (idx + 1) / total * 80))
+
                 ok, _ = self.exiftool.write_metadata(sp, metadata,
-                                                     ignore_minor=False, export_json=False)
+                                                     ignore_minor=False,
+                                                     export_json=False)
                 if ok:
                     saved.append(sp)
                 else:
                     write_log(t('metadata_failed', path=str(sp)), 'warn')
+                    self._update_item_status(
+                        iid, status='failed', stage='metadata',
+                        progress=100, error='metadata_failed')
                     return False, iid, sp, metadata
             else:
+                self._update_item_status(
+                    iid, status='failed', stage='download',
+                    progress=int(5 + idx / total * 80),
+                    error='download_failed')
                 return False, iid, None, metadata
+
+        # 完成
+        self._update_item_status(iid, status='success', stage='done',
+                                 progress=100)
 
         restr_str = ""
         if x_restrict == 1:
@@ -1275,6 +1372,7 @@ class WebBridge:
         self.clients_lock = threading.Lock()
         self.worker = DownloadWorker(config, session)
         self.worker.set_status_callback(self.on_worker_status)
+        self.worker.items_callback = self._on_items_update
         self.worker.rate_limiter.on_limited = self._on_rate_limited
 
     def set_loop(self, loop):
@@ -2338,6 +2436,12 @@ async def ws_handler(request):
         init_payload['type'] = 'init'
         init_payload['config'] = bridge.config.config
         init_payload['ui_state'] = bridge.session.get_ui_state()
+        # Include current items snapshot / 附带当前项状态快照
+        with bridge.worker._items_lock:
+            init_payload['items'] = [
+                {'pid': pid, **info}
+                for pid, info in bridge.worker.items_status.items()
+            ]
         await ws.send_str(json.dumps(init_payload, ensure_ascii=False))
 
         async for msg in ws:
