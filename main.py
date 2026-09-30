@@ -1396,6 +1396,10 @@ class WebBridge:
     def _on_rate_limited(self, delay):
         self.broadcast({'type': 'rate_limited', 'delay': int(delay)})
 
+    def _on_items_update(self, snapshot):
+        """Broadcast per-item status / 广播单项状态"""
+        self.broadcast({'type': 'queue_items', 'items': snapshot})
+
     async def register(self, ws):
         with self.clients_lock:
             self.clients.add(ws)

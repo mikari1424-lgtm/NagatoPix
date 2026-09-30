@@ -40,8 +40,6 @@ let ivState = {
     pages: [],
     pageIdx: 0,
 };
-let queueItems = []; // server-pushed item statuses / 后端推送的项状态
-let dlItemsExpanded = false;
 
 const tableItemGetters = {
     "ranking-list": () => rankingItems,
@@ -489,17 +487,21 @@ function updateQueueStatus(payload) {
 
     // Float ball / 悬浮球
     const ball = document.getElementById("float-ball");
+    const ballCount = document.getElementById("ball-count");
     const selCount = getSelectionCount();
-    if (selCount > 0) {
-        ball.classList.add("show");
-        document.getElementById("ball-count").textContent = selCount;
-    } else {
-        ball.classList.remove("show");
+    if (ball) {
+        if (selCount > 0) {
+            ball.classList.add("show");
+            if (ballCount) ballCount.textContent = selCount;
+        } else {
+            ball.classList.remove("show");
+        }
     }
 
     // Progress summary / 进度摘要
     const total = q + p;
     const pct = total > 0 ? (p / total) * 100 : 0;
+
     const fill = document.getElementById("progress-fill");
     if (fill) fill.style.width = pct.toFixed(1) + "%";
 
@@ -537,6 +539,7 @@ function updateQueueStatus(payload) {
     // Controls / 控件
     const presetSel = document.getElementById("dl-preset");
     if (presetSel) presetSel.value = mode;
+
     const threadsInput = document.getElementById("dl-threads");
     if (threadsInput) {
         threadsInput.value = workers;
@@ -549,91 +552,23 @@ function updateQueueStatus(payload) {
         btnStop.textContent = stopping ? t("btn_stopping") : t("btn_stop");
     }
 
-    document.querySelectorAll(".add-queue-btn").forEach((btn) => {
-        if (btn.id === "bookmark-add-btn") {
-            btn.disabled = parsedBookmarkUrls.length === 0;
-        }
-    });
+    // Legacy buttons (may not exist) / 兼容旧按钮
+    const btnStart = document.getElementById("btn-start");
+    if (btnStart) btnStart.disabled = running || stopping;
+
+    const queueCountEl = document.getElementById("queue-count");
+    if (queueCountEl) queueCountEl.textContent = q;
+
+    const failedCountEl = document.getElementById("failed-count");
+    if (failedCountEl) failedCountEl.textContent = f;
+
+    // Bookmark add button state / 书签添加按钮
+    const bkBtn = document.getElementById("bookmark-add-btn");
+    if (bkBtn) bkBtn.disabled = parsedBookmarkUrls.length === 0;
 
     updateSelectionCount();
 }
 
-function toggleDownloadItems() {
-    dlItemsExpanded = !dlItemsExpanded;
-    const wrap = document.getElementById("dl-items-wrap");
-    const icon = document.getElementById("dl-items-expand-icon");
-    if (wrap) wrap.style.display = dlItemsExpanded ? "flex" : "none";
-    if (icon) icon.style.transform = dlItemsExpanded ? "" : "rotate(-90deg)";
-    if (dlItemsExpanded) renderQueueItems();
-}
-
-function renderQueueItems() {
-    const list = document.getElementById("dl-items-list");
-    const countEl = document.getElementById("dl-items-count");
-    if (countEl) countEl.textContent = `(${queueItems.length})`;
-    if (!list) return;
-
-    if (!queueItems.length) {
-        list.innerHTML = `<div class="empty-msg" style="padding:20px">${t("no_result")}</div>`;
-        return;
-    }
-
-    const rows = queueItems
-        .map((it) => {
-            const pid = it.pid || "—";
-            const title = it.title || "";
-            const titleHtml = title
-                ? `<a href="https://www.pixiv.net/artworks/${pid}"
-                  target="_blank" rel="noopener"
-                  class="dl-item-title"
-                  title="${escapeHtml(title)}">${escapeHtml(title)}</a>`
-                : `<span class="dl-item-title empty">—</span>`;
-
-            const status = it.status || "pending";
-            const stage = it.stage || "";
-            let statusText = t(`dl_item_status_${status}`) || status;
-            if (status === "processing" && stage) {
-                statusText = t(`dl_stage_${stage}`) || statusText;
-            }
-            const statusClass =
-                status === "processing"
-                    ? "processing"
-                    : status === "success"
-                      ? "success"
-                      : status === "failed"
-                        ? "failed"
-                        : "";
-
-            const progress = it.progress || 0;
-            const progressClass =
-                status === "success"
-                    ? "success"
-                    : status === "failed"
-                      ? "failed"
-                      : "";
-            const errorAttr = it.error
-                ? ` class="dl-item-error" title="${escapeHtml(it.error)}"`
-                : "";
-
-            return `<div class="dl-item">
-            <span class="dl-item-pid">${pid}</span>
-            ${titleHtml}
-            <span class="dl-item-status ${statusClass}"${errorAttr}>
-                ${escapeHtml(statusText)}
-            </span>
-            <div class="dl-item-progress ${progressClass}">
-                <div class="dl-item-progress-bar">
-                    <div class="dl-item-progress-fill"
-                         style="width:${Math.min(100, Math.max(0, progress))}%"></div>
-                </div>
-                <span class="dl-item-progress-text">${progress}%</span>
-            </div>
-        </div>`;
-        })
-        .join("");
-
-    list.innerHTML = rows;
-}
 function updateDownloadStatusText() {
     const el = document.getElementById("dl-status");
     if (!el) return;
@@ -1091,13 +1026,31 @@ function getSelectionCount() {
 
 function updateSelectionCount() {
     const count = getSelectionCount();
-    // Float ball update
+
     const ball = document.getElementById("float-ball");
-    if (count > 0) {
-        ball.classList.add("show");
-        document.getElementById("ball-count").textContent = count;
-    } else {
-        ball.classList.remove("show");
+    const ballCount = document.getElementById("ball-count");
+    if (ball) {
+        if (count > 0) {
+            ball.classList.add("show");
+            if (ballCount) ballCount.textContent = count;
+        } else {
+            ball.classList.remove("show");
+        }
+    }
+
+    // Legacy selectors (may not exist) / 兼容旧按钮
+    const btn = document.getElementById("btn-add-selected");
+    if (btn) {
+        btn.innerHTML = `${t("btn_add_selected")} (${count})`;
+        const isRunning =
+            document.getElementById("btn-start")?.disabled || false;
+        btn.disabled = count === 0 || isRunning;
+    }
+
+    const btnRec = document.getElementById("btn-recommend-selected");
+    if (btnRec) {
+        btnRec.innerHTML = `${t("btn_recommend_selected")} (${count})`;
+        btnRec.disabled = count === 0;
     }
 }
 
@@ -2750,6 +2703,88 @@ document.addEventListener("keydown", (e) => {
         illustViewerPageNext();
     }
 });
+
+// ============ Download items list ============
+let queueItems = [];
+let dlItemsExpanded = false;
+
+function toggleDownloadItems() {
+    dlItemsExpanded = !dlItemsExpanded;
+    const wrap = document.getElementById("dl-items-wrap");
+    const icon = document.getElementById("dl-items-expand-icon");
+    if (wrap) wrap.style.display = dlItemsExpanded ? "flex" : "none";
+    if (icon) icon.style.transform = dlItemsExpanded ? "" : "rotate(-90deg)";
+    if (dlItemsExpanded) renderQueueItems();
+}
+
+function renderQueueItems() {
+    const list = document.getElementById("dl-items-list");
+    const countEl = document.getElementById("dl-items-count");
+    if (countEl) countEl.textContent = `(${queueItems.length})`;
+    if (!list) return;
+
+    if (!queueItems.length) {
+        list.innerHTML = `<div class="empty-msg" style="padding:20px">${t("no_result")}</div>`;
+        return;
+    }
+
+    const rows = queueItems
+        .map((it) => {
+            const pid = it.pid || "—";
+            const title = it.title || "";
+            const titleHtml = title
+                ? `<a href="https://www.pixiv.net/artworks/${pid}"
+                  target="_blank" rel="noopener"
+                  class="dl-item-title"
+                  title="${escapeHtml(title)}">${escapeHtml(title)}</a>`
+                : `<span class="dl-item-title empty">—</span>`;
+
+            const status = it.status || "pending";
+            const stage = it.stage || "";
+            let statusText = t(`dl_item_status_${status}`) || status;
+            if (status === "processing" && stage) {
+                statusText = t(`dl_stage_${stage}`) || statusText;
+            }
+            const statusClass =
+                status === "processing"
+                    ? "processing"
+                    : status === "success"
+                      ? "success"
+                      : status === "failed"
+                        ? "failed"
+                        : "";
+
+            const progress = it.progress || 0;
+            const progressClass =
+                status === "success"
+                    ? "success"
+                    : status === "failed"
+                      ? "failed"
+                      : "";
+            const errorAttr = it.error
+                ? ` class="dl-item-error" title="${escapeHtml(it.error)}"`
+                : "";
+
+            return `<div class="dl-item">
+            <span class="dl-item-pid">${pid}</span>
+            ${titleHtml}
+            <span class="dl-item-status ${statusClass}"${errorAttr}>
+                ${escapeHtml(statusText)}
+            </span>
+            <div class="dl-item-progress ${progressClass}">
+                <div class="dl-item-progress-bar">
+                    <div class="dl-item-progress-fill"
+                         style="width:${Math.min(100, Math.max(0, progress))}%"></div>
+                </div>
+                <span class="dl-item-progress-text">${progress}%</span>
+            </div>
+        </div>`;
+        })
+        .join("");
+
+    list.innerHTML = rows;
+}
+
 // Boot
 currentLang = detectLang();
 const savedTheme = localStorage.getItem("nagato_theme") || "dark";
