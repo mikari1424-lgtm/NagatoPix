@@ -824,8 +824,7 @@ class ExifToolWrapper:
                 args_file = f.name
                 f.write("#[CSTR]-charset=UTF8\n")
                 f.write("#[CSTR]-charset=filename=UTF8\n")
-                if ignore_minor:
-                    f.write("-m\n")
+                f.write("-m\n")  # Always ignore minor errors / 始终忽略次要错误
                 f.write("-overwrite_original\n")
                 for tag, value in metadata.items():
                     if value is None:
@@ -849,6 +848,7 @@ class ExifToolWrapper:
         except Exception as e:
             write_log(t('exiftool_args_failed', error=str(e)), 'error')
             return False, json_path
+        
 
         cmd = [str(self.exiftool_path), "-@", args_file]
         for attempt in range(2):
@@ -900,6 +900,8 @@ class DownloadWorker:
         self.failed_lock = threading.Lock()
         self.processed_count = 0
         self.status_callback = None
+        self._retry_pass = 0                 # NEW: auto-retry counter / 自动重试计数器
+        self._max_retry_passes = 3           # NEW: max auto-retry rounds / 最大自动重试轮次
 
     def set_status_callback(self, cb):
         self.status_callback = cb
@@ -945,10 +947,11 @@ class DownloadWorker:
             return False
 
     def add_items(self, items: list):
-        """
-        items: list of {url: str, metadata?: dict}
-        / 列表项：{url, metadata?}
-        """
+        # New batch when queue previously empty / 队列此前为空视为新批次
+        if self.processed_count > 0 and self.url_queue.empty() and not self.is_running:
+            self.processed_count = 0
+            self._retry_pass = 0
+
         n = 0
         for it in items:
             if isinstance(it, str):
@@ -1032,8 +1035,11 @@ class DownloadWorker:
                 item = self.url_queue.get(timeout=1)
             except queue.Empty:
                 break
+
+            url = None
+            cached = None
             if isinstance(item, tuple) and len(item) == 4:
-                # Retry tuple
+                # Legacy retry tuple / 旧重试元组（已不主动生成，兼容保留）
                 url, img_path, meta_d, _ = item
                 self._emit(t('task_retry', url=url), 'info')
                 ok, _ = self.exiftool.write_metadata(img_path, meta_d,
@@ -1046,7 +1052,6 @@ class DownloadWorker:
                         pid = self._parse_url(url)[1]
                         self.failed_items.append((pid, img_path, meta_d))
             else:
-                # Dict item: {url, metadata?}
                 url = item.get('url')
                 cached = item.get('metadata')
                 self._emit(t('processing', url=url,
@@ -1056,31 +1061,56 @@ class DownloadWorker:
                     self._emit(t('task_success', url=url), 'info')
                 else:
                     self._emit(t('task_failed', url=url), 'error')
-                    if img_path and meta_d:
+                    # Record for auto-retry regardless of img_path
+                    # / 无论 img_path 是否存在都记录，供自动重试
+                    if meta_d:
                         with self.failed_lock:
                             self.failed_items.append((pid, img_path, meta_d))
+
             self.processed_count += 1
             self._save_queue()
             time.sleep(float(self.config.get("download_delay", 0.5)))
             self.url_queue.task_done()
+
         with self._threads_lock:
             self._active_threads -= 1
             if self._active_threads == 0:
                 self.is_running = False
                 self.should_stop = False
+
                 has_remaining = not self.url_queue.empty()
                 has_failed = self.get_failed_count() > 0
-                if not has_remaining and not has_failed:
-                    self.session.set_queue({'current_tasks': [], 'failed_tasks': []})
-                    write_log(t('queue_finished_empty'), 'info')
-                else:
+
+                if has_remaining:
+                    # New items arrived during shutdown / 关闭期间有新项
                     self._save_queue()
-                    write_log(t('queue_finished_partial',
-                                pending=self.url_queue.qsize(),
-                                failed=self.get_failed_count()), 'info')
-                self._emit(t('workers_stopped'), 'info')
-                if has_remaining and not self.should_stop:
                     self.start()
+                elif has_failed and self._retry_pass < self._max_retry_passes:
+                    # Auto-retry pass / 自动重试轮次
+                    self._retry_pass += 1
+                    with self.failed_lock:
+                        retry_items = list(self.failed_items)
+                        self.failed_items.clear()
+                    for pid, img_path, meta_d in retry_items:
+                        retry_url = f"https://www.pixiv.net/artworks/{pid}"
+                        self.url_queue.put({'url': retry_url})
+                    self._emit(
+                        f"Auto-retry pass {self._retry_pass}/{self._max_retry_passes}: "
+                        f"{len(retry_items)} items",
+                        'warn')
+                    self.start()
+                else:
+                    if not has_remaining and not has_failed:
+                        self.session.set_queue({'current_tasks': [],
+                                                'failed_tasks': []})
+                        self._retry_pass = 0
+                        write_log("All tasks completed", 'info')
+                    else:
+                        self._save_queue()
+                        write_log(
+                            f"Retries exhausted, {self.get_failed_count()} items still failing",
+                            'warn')
+                    self._emit(t('workers_stopped'), 'info')
 
     def _process_url(self, url, cached_meta=None):
         try:
@@ -1482,12 +1512,6 @@ async def handle_command(bridge, cmd, ws):
     elif c == 'clear_queue':
         n = bridge.worker.clear_queue()
         await ws.send_str(json.dumps({'type': 'success', 'msg': f'Cleared {n} task(s)'}))
-
-    elif c == 'retry_failed':
-        n = bridge.worker.retry_failed()
-        if n == 0:
-            await ws.send_str(json.dumps({'type': 'error', 'msg': 'No failed tasks'}))
-
     elif c == 'search':
         tag = cmd.get('tag', '')
         sort = cmd.get('sort', 'date_desc')
@@ -2359,9 +2383,12 @@ def load_saved_queue(worker, session: SessionManager):
         pid = item.get('pid')
         img_path = item.get('img_path')
         meta_d = item.get('metadata') or {}
-        if pid and img_path:
+        if pid:
+            # img_path may be None for download failures
+            # / 下载失败时 img_path 可能为 None
+            path_obj = Path(img_path) if img_path else None
             with worker.failed_lock:
-                worker.failed_items.append((int(pid), Path(img_path), meta_d))
+                worker.failed_items.append((int(pid), path_obj, meta_d))
     if current or failed:
         write_log(t('queue_restored', pending=len(current), failed=len(failed)), 'info')
 

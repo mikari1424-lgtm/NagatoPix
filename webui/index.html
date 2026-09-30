@@ -338,7 +338,6 @@
                     <input type="number" id="dl-threads" min="1" max="8" value="3" onchange="onThreadsChange()">
                 </div>
                 <div class="download-actions">
-                    <button class="secondary" onclick="retryFailed()" data-i18n="btn_retry_failed"></button>
                     <button class="secondary" onclick="clearQueue()" data-i18n="btn_clear_queue"></button>
                     <button class="secondary" id="btn-stop" onclick="stopQueue()" data-i18n="btn_stop"></button>
                 </div>
@@ -385,6 +384,9 @@
         <section class="tab" id="tab-settings">
             <div class="panel">
                 <h3 data-i18n="settings_account"></h3>
+                <div class="row">
+                    <span class="hint-text" id="config-status" style="margin-left:0"></span>
+                </div>
                 <div class="row">
                     <label class="label-wide" data-i18n="settings_token"></label>
                     <input type="text" id="cfg-refresh_token" style="flex:1" data-i18n-placeholder="token_ph">

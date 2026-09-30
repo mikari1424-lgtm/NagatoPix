@@ -1714,9 +1714,6 @@ function stopQueue() {
 function clearQueue() {
     if (confirm(t("toast_confirm_clear"))) send({ cmd: "clear_queue" });
 }
-function retryFailed() {
-    if (confirm(t("toast_confirm_retry"))) send({ cmd: "retry_failed" });
-}
 
 // ============ Download controls ============
 function onPresetChange() {
@@ -1770,7 +1767,9 @@ function fillConfig(cfg) {
     }
 }
 
-function saveConfig() {
+let configSaveTimer = null;
+
+function saveConfig(silent = false) {
     const data = {};
     CONFIG_KEYS.forEach((k) => {
         const el = document.getElementById("cfg-" + k);
@@ -1779,9 +1778,36 @@ function saveConfig() {
                 el.type === "number" ? parseFloat(el.value) || 0 : el.value;
     });
     send({ cmd: "save_config", data });
+
+    // Apply language immediately / 立即应用语言
     if (data.language === "zh-CN" || data.language === "en") {
         switchLanguage(data.language);
     }
+
+    if (!silent) {
+        toast(t("toast_config_saved") || "Config saved", "success");
+    }
+    const statusEl = document.getElementById("config-status");
+    if (statusEl) {
+        statusEl.textContent = t("toast_config_saved") || "Config saved";
+        setTimeout(() => {
+            statusEl.textContent = "";
+        }, 2000);
+    }
+}
+
+function scheduleConfigSave() {
+    if (configSaveTimer) clearTimeout(configSaveTimer);
+    configSaveTimer = setTimeout(() => saveConfig(true), 700);
+}
+
+function bindConfigAutoSave() {
+    CONFIG_KEYS.forEach((k) => {
+        const el = document.getElementById("cfg-" + k);
+        if (!el) return;
+        el.addEventListener("input", scheduleConfigSave);
+        el.addEventListener("change", scheduleConfigSave);
+    });
 }
 
 function testLogin() {
@@ -2611,6 +2637,7 @@ applyTheme(savedTheme);
 applyI18n();
 renderTokenHelp();
 connect();
+bindConfigAutoSave();
 
 document.querySelectorAll("nav button").forEach((btn) => {
     btn.onclick = () => {
