@@ -11,5 +11,6 @@
 !main.py
 !webui/
 !webui/**
+!AppLogos/
 AppLogos/Logo.xcf
 !AppLogos/**
