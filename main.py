@@ -281,10 +281,18 @@ class AccountsManager:
                             'bookmarks': data.get('bookmarks', []),
                         }]
                     }
+                data.setdefault('webapi', {'PHPSESSID': ''})
                 return data
             except Exception as e:
                 write_log(f"accounts.json load failed: {e}", 'warn')
         return {'current_index': 0, 'accounts': []}
+
+    def get_phpsessid(self) -> str:
+        return self.data.get('webapi', {}).get('PHPSESSID', '')
+
+    def set_phpsessid(self, value: str):
+        self.data.setdefault('webapi', {})['PHPSESSID'] = value
+        self.save()
 
     def _ensure_migration(self):
         """Migrate from config.toml if no accounts exist / 从 config 迁移"""
