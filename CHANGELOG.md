@@ -1,12 +1,96 @@
 # NagatoPix - Changelog
 
-## 1.2.0
+## 1.2.1
 
-**从"单一账号的浏览下载器"到"多账号一体化 Pixiv 客户端"。**
+### Added
 
-本次版本引入多账号体系、主题系统、作品查看模态框，并将配置与会话数据从单一文件升级为结构化存储。
+#### 下载界面重写
+
+- **进度摘要卡片**：
+  - 大号百分比（1 位小数） + 剩余项目数
+  - 进度条实时同步
+  - 失败项计数（>0 时红色）+ 状态文案
+  - 状态识别：空闲 / 下载中 / 停止中 / 重试中 (x/3)
+- **可折叠下载项列表**：
+  - 每行显示：PID、标题（超链接到 Pixiv）、状态、进度条 + 百分比
+  - 阶段文案：获取元数据 / 准备中 / 下载中 / 写入元数据 / 完成 / 失败
+  - 失败项悬停显示错误码
+  - 展开/收起图标使用 SVG
+- **控制行**：折叠按钮居左，预设/线程/清空/停止居右
+
+#### 自动重试
+
+- **队列结束后自动重试**：失败项自动重新入队，最多 3 轮
+- **重试计数显示**：状态栏显示 `重试中 (x/3)`
+- **重试耗尽后**：保留失败项到 `session.json`，不再无限循环
+- **移除"重试失败"按钮**：不再需要手动触发
+
+#### 自动保存
+
+- **配置自动保存**：输入框 `input` / `change` 后 0.7 秒自动写入 `config.toml`
+- **保存提示**：设置页显示短暂的"已保存"状态
+
+#### 静态资源无缓存
+
+- **`no_cache_middleware`**：`/static/`、`/ui_icons/`、`/static_icons/`、`/` 响应带 `no-store`
+- **开发便利**：前端改动后无需手动清缓存，普通刷新即可生效
+
+#### 百科搜索
+
+- **"搜索百科"按钮**：搜索标签行新增按钮，带 SVG 图标
+- **萌娘百科精确搜索**：新标签打开 `zh.moegirl.org.cn` 的 `"tag"` 全文搜索
+
+#### Pixiv 书签
+
+- **模态框底部动作**：
+  - **Pixiv 书签**：一键添加/移除公开书签，状态实时同步
+  - **下载**：直接加入下载队列
+
+#### 折叠图标
+
+- **SVG 替换 Emoji**：所有折叠区（关注标签/关注作者/排行榜/搜索设置/用户详情）使用 `expand.svg`
+- **旋转动画**：0.18s 平滑过渡
 
 ---
+
+### Changed
+
+#### ExifTool 调用
+
+- **始终使用 `-m`**：忽略次要错误，避免因文件本身问题导致失败
+- **参数保留兼容**：`ignore_minor` 参数仍在签名中，但内部不再区分
+
+#### 下载流程
+
+- **下载失败也记录**：`img_path=None` 的项同样进入 `failed_items`，供自动重试
+- **重试以完整流程重跑**：重新走 API → 下载 → 元数据
+- **新批次重置**：队列清空后重新添加任务时，`processed_count` 与 `_retry_pass` 归零
+
+#### 错误处理
+
+- **`updateQueueStatus` 完全防御性**：所有 DOM 访问加 null 检查
+- **`updateSelectionCount` 同步防御**：兼容新旧元素
+- **middleware 签名修正**：使用 `@web.middleware` 装饰器
+
+#### 打包
+
+- **`app.spec` 新增**：onedir 模式、UPX 禁用、控制台启用
+- **主文件重命名**：`pixiv_server.py` → `main.py`
+- **排除项**：tkinter、PyQt、PIL、numpy、pandas、matplotlib、IPython、pytest、tornado、django 等未使用库
+
+---
+
+### Fixed
+
+- **下载计数累计**：新批次不再保留上一批的 `processed_count`
+- **`WebBridge._on_items_update` 缺失**：补齐方法定义，避免启动时 `AttributeError`
+- **`toggleDownloadItems is not defined`**：函数补全
+- **`updateQueueStatus` 空指针**：`btn-start` 等旧元素已移除，加 null 检查
+- **middleware `'Application' object has no attribute 'path'`**：签名修正
+- **ExifTool 失败的 HTTP/SSL 错误**：自动重试机制覆盖
+- **`session.json` 中 `img_path=None`**：`load_saved_queue` 兼容处理
+
+## 1.2.0
 
 ### Added
 
