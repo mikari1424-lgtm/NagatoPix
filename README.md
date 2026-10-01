@@ -6,6 +6,7 @@
 一个前后端分离的 Pixiv 客户端。基于 Python + WebSocket + 原生 WebUI，用最少的资源完成最多的浏览与下载。
 
 [English Version →](README_EN.md)
+[声明和许可证 ->](DISCLAIMER.md)
 
 ---
 
@@ -355,22 +356,3 @@ A: 代码跨平台，但需要自行替换 ExifTool 为对应平台的版本，�
 A: 侧边栏底部有语言切换下拉框，或在设置中选择。语言设置会持久化。
 
 ---
-
-## 致谢
-
-- [pixivpy3](https://github.com/upbit/pixivpy) — Pixiv API 封装
-- [ExifTool](https://exiftool.org/) — 元数据写入
-- [aiohttp](https://docs.aiohttp.org/) — 异步 HTTP 服务器
-- [长门有希](https://zh.wikipedia.org/wiki/長門有希) — 命名灵感
-
----
-
-## 许可证
-
-GPL v3 License
-
----
-
-## 免责声明
-
-本程序为个人学习用途。使用本程序下载的内容版权归原作者所有，请勿用于商业用途或二次分发。请遵守 Pixiv 的[服务条款](https://www.pixiv.net/terms.php)和当地法律法规。
