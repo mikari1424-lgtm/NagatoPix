@@ -150,6 +150,9 @@ def peek_language() -> str:
 # Config / 配置
 # ============================================================
 class ConfigManager:
+    CONFIG_FILE = get_app_dir() / "config.toml"
+    LEGACY_CONFIG_FILE = get_app_dir() / "pixiv_client_config.json"
+
     DEFAULT_CONFIG = {
         'refresh_token': '',
         'download_dir': str(Path.home() / "Pictures" / "Pixiv"),
@@ -172,7 +175,7 @@ class ConfigManager:
     }
 
     VALIDATORS = {
-        'performance.download_delay':  ('float', 0.0, 60.0),
+        'performance.download_delay':   ('float', 0.0, 60.0),
         'performance.parallel_workers': ('int',   0,   64),
         'performance.max_retries':      ('int',   1,   100),
         'api.request_delay':            ('float', 0.0, 60.0),
@@ -181,10 +184,134 @@ class ConfigManager:
         'api.parallel_requests':        ('int',   1,   8),
     }
 
+    STRING_FIELDS = (
+        'refresh_token', 'download_dir', 'proxy', 'language', 'theme',
+    )
+
     def __init__(self):
         self.config = self._load_or_init()
         self._resolve_auto_workers()
 
+    # ------------------------------------------------------------
+    # Load / migrate / init
+    # ------------------------------------------------------------
+    def _load_or_init(self) -> dict:
+        if self.CONFIG_FILE.exists():
+            try:
+                with open(self.CONFIG_FILE, 'rb') as f:
+                    cfg = tomllib.load(f)
+                write_log(t('config_loaded', path=str(self.CONFIG_FILE)), 'info')
+                merged = self._merge_defaults(cfg)
+                validated, errors = self._validate(merged)
+                for key, val, default, err in errors:
+                    write_log(t('config_invalid', key=key, value=val,
+                                default=default, error=err), 'warn')
+                self.config = validated
+                if errors:
+                    self.save()
+                write_log(t('config_validated'), 'info')
+                return self.config
+            except Exception as e:
+                write_log(t('config_load_failed', error=str(e)), 'warn')
+                self.config = self._default_copy()
+                self.save()
+                return self.config
+
+        if self.LEGACY_CONFIG_FILE.exists():
+            try:
+                with open(self.LEGACY_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    old = json.load(f)
+                merged = self._merge_defaults(old)
+                for k in ("exiftool_path", "username", "password", "api_language"):
+                    merged.pop(k, None)
+                validated, errors = self._validate(merged)
+                self.config = validated
+                self.save()
+                write_log(t('config_migrated', path=str(self.CONFIG_FILE)), 'info')
+                return self.config
+            except Exception as e:
+                write_log(t('config_load_failed', error=str(e)), 'warn')
+
+        self.config = self._default_copy()
+        self.save()
+        write_log(t('config_created', path=str(self.CONFIG_FILE)), 'info')
+        return self.config
+
+    def _default_copy(self) -> dict:
+        """Deep copy of default config / 默认配置的深拷贝"""
+        return json.loads(json.dumps(self.DEFAULT_CONFIG))
+
+    def _merge_defaults(self, cfg: dict) -> dict:
+        """Merge loaded config into defaults / 将加载的配置合并到默认值"""
+        result = self._default_copy()
+        for k, v in cfg.items():
+            if k in ('performance', 'api') and isinstance(v, dict):
+                # Merge nested sections / 合并嵌套段
+                for sk, sv in v.items():
+                    result[k][sk] = sv
+            elif k in result:
+                result[k] = v
+        return result
+
+    # ------------------------------------------------------------
+    # Validation
+    # ------------------------------------------------------------
+    def _validate(self, cfg: dict):
+        errors = []
+        result = json.loads(json.dumps(cfg))
+
+        for path, (typ, lo, hi) in self.VALIDATORS.items():
+            keys = path.split('.')
+            node = result
+            for k in keys[:-1]:
+                node = node.get(k, {})
+            leaf = keys[-1]
+            if leaf not in node:
+                continue
+            try:
+                v = node[leaf]
+                if typ == 'int':
+                    if isinstance(v, str):
+                        v = int(v)
+                    if isinstance(v, bool) or not isinstance(v, int):
+                        raise ValueError('not an integer')
+                else:
+                    if isinstance(v, str):
+                        v = float(v)
+                    if isinstance(v, bool) or not isinstance(v, (int, float)):
+                        raise ValueError('not a number')
+                    v = float(v)
+                if v < lo or v > hi:
+                    raise ValueError(f'out of range [{lo}, {hi}]')
+                node[leaf] = v
+            except (ValueError, TypeError) as e:
+                # Get default / 获取默认值
+                dnode = self.DEFAULT_CONFIG
+                for k in keys[:-1]:
+                    dnode = dnode.get(k, {})
+                default = dnode.get(leaf)
+                errors.append((path, node.get(leaf), default, str(e)))
+                node[leaf] = default
+
+        # String fields / 字符串字段
+        for key in self.STRING_FIELDS:
+            if key in result and not isinstance(result[key], str):
+                errors.append((key, result[key], self.DEFAULT_CONFIG[key], 'not a string'))
+                result[key] = self.DEFAULT_CONFIG[key]
+
+        # Enum fields / 枚举字段
+        if result.get('language') not in ('auto', 'zh-CN', 'en'):
+            result['language'] = 'auto'
+        if result.get('theme') not in ('dark', 'light'):
+            result['theme'] = 'dark'
+        if result.get('performance', {}).get('download_mode') not in ('normal', 'high'):
+            result['performance']['download_mode'] = 'normal'
+
+        return result, errors
+
+    # ------------------------------------------------------------
+    # Auto worker detection
+    # ------------------------------------------------------------
     def _resolve_auto_workers(self):
         """Auto-detect worker count when parallel_workers == 0"""
         pw = self.config['performance'].get('parallel_workers', 0)
@@ -192,7 +319,6 @@ class ConfigManager:
             try:
                 import psutil
                 logical = psutil.cpu_count(logical=True) or 4
-                # Cap at 8; use half the logical cores for I/O-bound work
                 detected = max(1, min(8, logical // 2))
             except Exception:
                 detected = 3
@@ -201,8 +327,10 @@ class ConfigManager:
         else:
             self.config['performance']['_resolved_workers'] = pw
 
+    # ------------------------------------------------------------
+    # Dotted-path accessors
+    # ------------------------------------------------------------
     def get(self, path: str, default=None):
-        """Dotted path accessor / 支持点号路径"""
         keys = path.split('.')
         cur = self.config
         for k in keys:
@@ -222,16 +350,26 @@ class ConfigManager:
         cur[keys[-1]] = value
         self.save()
 
+    # ------------------------------------------------------------
+    # Save
+    # ------------------------------------------------------------
+    def save(self):
+        try:
+            with open(self.CONFIG_FILE, 'w', encoding='utf-8') as f:
+                f.write(self._to_toml(self.config))
+        except Exception as e:
+            write_log(t('config_save_failed', error=str(e)), 'error')
+
     def _to_toml(self, cfg: dict) -> str:
         lines = []
-        # Flat top-level keys first
+        # Flat top-level keys first / 顶层键在前
         for k, v in cfg.items():
             if isinstance(v, dict):
                 continue
             if k.startswith('_'):
                 continue
             lines.append(self._format_kv(k, v))
-        # Then sections
+        # Then sections / 然后各段
         for section, vals in cfg.items():
             if not isinstance(vals, dict):
                 continue
@@ -252,6 +390,15 @@ class ConfigManager:
         if isinstance(v, (int, float)):
             return f'{k} = {v}'
         return f'# {k} = <unsupported>'
+
+    # ------------------------------------------------------------
+    # Language resolution
+    # ------------------------------------------------------------
+    def effective_language(self) -> str:
+        lang = self.config.get('language', 'auto')
+        if lang == 'auto':
+            return detect_system_language()
+        return lang if lang in ('zh-CN', 'en') else 'en'
 
 # ============================================================
 # Accounts / 账户
@@ -1750,7 +1897,7 @@ class WebBridge:
         self.loop = None
         self.clients = set()
         self.clients_lock = threading.Lock()
-        self.worker = DownloadWorker(config, session)
+        self.worker = DownloadWorker(config, session=session, accounts=accounts)
         self.worker.set_status_callback(self.on_worker_status)
         self.worker.items_callback = self._on_items_update
         self.worker.rate_limiter.on_limited = self._on_rate_limited
