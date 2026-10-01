@@ -2511,13 +2511,15 @@ async def startup_latency_check(bridge):
 
 async def main_async(port, config, accounts, session):
     app = web.Application()
+    @web.middleware
     async def no_cache_middleware(request, handler):
-        """Disable caching for static resources during development
-        / 开发期禁用静态资源缓存"""
+        """Disable caching for static resources / 开发期禁用静态资源缓存"""
         response = await handler(request)
         path = request.path
-        if path.startswith('/static/') or path.startswith('/ui_icons/') \
-            or path.startswith('/static_icons/') or path == '/':
+        if (path.startswith('/static/')
+                or path.startswith('/ui_icons/')
+                or path.startswith('/static_icons/')
+                or path == '/'):
             response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
             response.headers['Pragma'] = 'no-cache'
             response.headers['Expires'] = '0'
