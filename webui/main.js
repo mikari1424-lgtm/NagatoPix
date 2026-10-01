@@ -1813,29 +1813,34 @@ const CONFIG_KEYS = [
     "download_dir",
     "proxy",
     "language",
-    "download_delay",
-    "api_request_delay",
-    "parallel_workers",
-    "max_retries",
-    "rate_limit_retry_delay",
-    "max_results",
+    "theme",
+    "performance.download_mode",
+    "performance.parallel_workers",
+    "performance.download_delay",
+    "performance.max_retries",
+    "api.request_delay",
+    "api.rate_limit_wait",
+    "api.max_results",
+    "api.parallel_requests",
+    "api.enable_web_ajax",
+    "webapi.PHPSESSID",
 ];
 
 function fillConfig(cfg) {
     CONFIG_KEYS.forEach((k) => {
         const el = document.getElementById("cfg-" + k);
-        if (el && cfg[k] !== undefined) el.value = cfg[k];
+        if (!el) return;
+        const val = getDotted(cfg, k);
+        if (val === undefined) return;
+        if (el.type === "checkbox") el.checked = !!val;
+        else el.value = val;
     });
-    if (
-        cfg.language &&
-        (cfg.language === "zh-CN" || cfg.language === "en") &&
-        cfg.language !== currentLang
-    ) {
-        currentLang = cfg.language;
-        localStorage.setItem("nagato_lang", currentLang);
-        applyI18n();
-        renderTokenHelp();
-    }
+}
+
+function getDotted(obj, path) {
+    return path
+        .split(".")
+        .reduce((o, k) => (o && o[k] !== undefined ? o[k] : undefined), obj);
 }
 
 let configSaveTimer = null;
@@ -1844,9 +1849,10 @@ function saveConfig(silent = false) {
     const data = {};
     CONFIG_KEYS.forEach((k) => {
         const el = document.getElementById("cfg-" + k);
-        if (el)
-            data[k] =
-                el.type === "number" ? parseFloat(el.value) || 0 : el.value;
+        if (!el) return;
+        if (el.type === "checkbox") data[k] = el.checked;
+        else if (el.type === "number") data[k] = parseFloat(el.value) || 0;
+        else data[k] = el.value;
     });
     send({ cmd: "save_config", data });
 

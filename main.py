@@ -23,12 +23,16 @@ from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, parse_qs
 import logging
+import zipfile
+import shutil
+from PIL import Image
 
 import requests
 import aiohttp
 from aiohttp import web
 from bs4 import BeautifulSoup
 from pixivpy3 import AppPixivAPI, PixivError
+from concurrent.futures import ThreadPoolExecutor
 
 try:
     import tomllib
@@ -147,156 +151,107 @@ def peek_language() -> str:
 # ============================================================
 class ConfigManager:
     DEFAULT_CONFIG = {
-        "refresh_token": "",
-        "download_dir": str(Path.home() / "Pictures" / "Pixiv"),
-        "proxy": "",
-        "language": "auto",
-        "theme": "dark",
-        "download_mode": "normal",
-        "download_delay": 0.5,
-        "api_request_delay": 0.3,
-        "max_results": 30,
-        "rate_limit_retry_delay": 150.0,
-        "max_retries": 3,
-        "parallel_workers": 3,
+        'refresh_token': '',
+        'download_dir': str(Path.home() / "Pictures" / "Pixiv"),
+        'proxy': '',
+        'language': 'auto',
+        'theme': 'dark',
+        'performance': {
+            'download_mode': 'normal',
+            'parallel_workers': 0,
+            'download_delay': 0.5,
+            'max_retries': 3,
+        },
+        'api': {
+            'request_delay': 0.3,
+            'rate_limit_wait': 150.0,
+            'max_results': 30,
+            'enable_web_ajax': True,
+            'parallel_requests': 1,
+        },
     }
 
     VALIDATORS = {
-        'download_delay':         ('float', 0.0, 60.0),
-        'api_request_delay':      ('float', 0.0, 60.0),
-        'max_results':            ('int',   1,   500),
-        'rate_limit_retry_delay': ('float', 1.0, 3600.0),
-        'max_retries':            ('int',   1,   100),
-        'parallel_workers':       ('int',   1,   8),
+        'performance.download_delay':  ('float', 0.0, 60.0),
+        'performance.parallel_workers': ('int',   0,   64),
+        'performance.max_retries':      ('int',   1,   100),
+        'api.request_delay':            ('float', 0.0, 60.0),
+        'api.rate_limit_wait':          ('float', 1.0, 3600.0),
+        'api.max_results':              ('int',   1,   500),
+        'api.parallel_requests':        ('int',   1,   8),
     }
 
     def __init__(self):
         self.config = self._load_or_init()
+        self._resolve_auto_workers()
 
-    def _load_or_init(self) -> dict:
-        if CONFIG_FILE.exists():
+    def _resolve_auto_workers(self):
+        """Auto-detect worker count when parallel_workers == 0"""
+        pw = self.config['performance'].get('parallel_workers', 0)
+        if pw == 0:
             try:
-                with open(CONFIG_FILE, 'rb') as f:
-                    cfg = tomllib.load(f)
-                write_log(t('config_loaded', path=str(CONFIG_FILE)), 'info')
-                merged = self._merge_defaults(cfg)
-                validated, errors = self._validate(merged)
-                for key, val, default, err in errors:
-                    write_log(t('config_invalid', key=key, value=val,
-                                default=default, error=err), 'warn')
-                self.config = validated
-                if errors:
-                    self.save()
-                write_log(t('config_validated'), 'info')
-                return self.config
-            except Exception as e:
-                write_log(t('config_load_failed', error=str(e)), 'warn')
-                self.config = self.DEFAULT_CONFIG.copy()
-                self.save()
-                return self.config
+                import psutil
+                logical = psutil.cpu_count(logical=True) or 4
+                # Cap at 8; use half the logical cores for I/O-bound work
+                detected = max(1, min(8, logical // 2))
+            except Exception:
+                detected = 3
+            self.config['performance']['_resolved_workers'] = detected
+            write_log(f"Auto worker count: {detected} (logical cores detected)", 'info')
+        else:
+            self.config['performance']['_resolved_workers'] = pw
 
-        if LEGACY_CONFIG_FILE.exists():
-            try:
-                with open(LEGACY_CONFIG_FILE, 'r', encoding='utf-8') as f:
-                    old = json.load(f)
-                merged = self._merge_defaults(old)
-                for k in ("exiftool_path", "username", "password", "api_language"):
-                    merged.pop(k, None)
-                validated, errors = self._validate(merged)
-                self.config = validated
-                self.save()
-                write_log(t('config_migrated', path=str(CONFIG_FILE)), 'info')
-                return self.config
-            except Exception as e:
-                write_log(t('config_load_failed', error=str(e)), 'warn')
+    def get(self, path: str, default=None):
+        """Dotted path accessor / 支持点号路径"""
+        keys = path.split('.')
+        cur = self.config
+        for k in keys:
+            if isinstance(cur, dict) and k in cur:
+                cur = cur[k]
+            else:
+                return default
+        return cur
 
-        self.config = self.DEFAULT_CONFIG.copy()
+    def set(self, path: str, value):
+        keys = path.split('.')
+        cur = self.config
+        for k in keys[:-1]:
+            if k not in cur or not isinstance(cur[k], dict):
+                cur[k] = {}
+            cur = cur[k]
+        cur[keys[-1]] = value
         self.save()
-        write_log(t('config_created', path=str(CONFIG_FILE)), 'info')
-        return self.config
-
-    def _merge_defaults(self, cfg: dict) -> dict:
-        merged = self.DEFAULT_CONFIG.copy()
-        for k, v in cfg.items():
-            if k in merged:
-                merged[k] = v
-        return merged
-
-    def _validate(self, cfg: dict):
-        errors = []
-        result = dict(cfg)
-        for key, (typ, lo, hi) in self.VALIDATORS.items():
-            if key not in result:
-                continue
-            try:
-                v = result[key]
-                if typ == 'int':
-                    if isinstance(v, str):
-                        v = int(v)
-                    if isinstance(v, bool) or not isinstance(v, int):
-                        raise ValueError('not an integer')
-                else:
-                    if isinstance(v, str):
-                        v = float(v)
-                    if isinstance(v, bool) or not isinstance(v, (int, float)):
-                        raise ValueError('not a number')
-                    v = float(v)
-                if v < lo or v > hi:
-                    raise ValueError(f'out of range [{lo}, {hi}]')
-                result[key] = v
-            except (ValueError, TypeError) as e:
-                default = self.DEFAULT_CONFIG[key]
-                errors.append((key, cfg[key], default, str(e)))
-                result[key] = default
-
-        for key in ('refresh_token', 'download_dir', 'proxy'):
-            if key in result and not isinstance(result[key], str):
-                errors.append((key, result[key], self.DEFAULT_CONFIG[key], 'not a string'))
-                result[key] = self.DEFAULT_CONFIG[key]
-
-        if result.get('language') not in ('auto', 'zh-CN', 'en'):
-            result['language'] = 'auto'
-        if result.get('theme') not in ('dark', 'light'):
-            result['theme'] = 'dark'
-        if result.get('download_mode') not in ('normal', 'high'):
-            result['download_mode'] = 'normal'
-
-        return result, errors
 
     def _to_toml(self, cfg: dict) -> str:
         lines = []
+        # Flat top-level keys first
         for k, v in cfg.items():
-            if isinstance(v, str):
-                esc = v.replace('\\', '\\\\').replace('"', '\\"')
-                lines.append(f'{k} = "{esc}"')
-            elif isinstance(v, bool):
-                lines.append(f'{k} = {"true" if v else "false"}')
-            elif isinstance(v, int):
-                lines.append(f'{k} = {v}')
-            elif isinstance(v, float):
-                lines.append(f'{k} = {v}')
-        return "\n".join(lines) + "\n"
+            if isinstance(v, dict):
+                continue
+            if k.startswith('_'):
+                continue
+            lines.append(self._format_kv(k, v))
+        # Then sections
+        for section, vals in cfg.items():
+            if not isinstance(vals, dict):
+                continue
+            lines.append('')
+            lines.append(f'[{section}]')
+            for k, v in vals.items():
+                if k.startswith('_'):
+                    continue
+                lines.append(self._format_kv(k, v))
+        return '\n'.join(lines) + '\n'
 
-    def save(self):
-        try:
-            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-                f.write(self._to_toml(self.config))
-        except Exception as e:
-            write_log(t('config_save_failed', error=str(e)), 'error')
-
-    def get(self, key, default=None):
-        return self.config.get(key, default)
-
-    def set(self, key, value):
-        self.config[key] = value
-        self.save()
-
-    def effective_language(self) -> str:
-        lang = self.config.get("language", "auto")
-        if lang == "auto":
-            return detect_system_language()
-        return lang if lang in ('zh-CN', 'en') else 'en'
-
+    def _format_kv(self, k: str, v) -> str:
+        if isinstance(v, str):
+            esc = v.replace('\\', '\\\\').replace('"', '\\"')
+            return f'{k} = "{esc}"'
+        if isinstance(v, bool):
+            return f'{k} = {"true" if v else "false"}'
+        if isinstance(v, (int, float)):
+            return f'{k} = {v}'
+        return f'# {k} = <unsupported>'
 
 # ============================================================
 # Accounts / 账户
@@ -640,6 +595,60 @@ class RateLimiter:
             except Exception:
                 pass
 
+class WebAjaxClient:
+    """Pixiv Web Ajax API client (requires PHPSESSID) / 网页版 API 客户端"""
+
+    BASE = "https://www.pixiv.net/ajax"
+
+    def __init__(self, config, accounts, rate_limiter):
+        self.config = config
+        self.accounts = accounts
+        self.rate_limiter = rate_limiter   # shared with App API / 与 App API 共用
+
+    def _headers(self) -> dict:
+        return {
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) "
+                           "Chrome/121.0.0.0 Safari/537.36"),
+            "Referer": "https://www.pixiv.net/",
+            "Accept": "application/json",
+            "Cookie": f"PHPSESSID={self.accounts.get_phpsessid()}",
+        }
+
+    def _request(self, path: str, params: dict = None) -> dict:
+        sessid = self.accounts.get_phpsessid()
+        if not sessid:
+            return {}
+        # Use global rate limiter / 使用全局限速器
+        self.rate_limiter.wait_if_limited()
+        try:
+            r = requests.get(f"{self.BASE}/{path}",
+                             params=params or {},
+                             headers=self._headers(),
+                             timeout=15)
+            if r.status_code == 200:
+                data = r.json()
+                if data.get('error'):
+                    write_log(f"Web Ajax error: {data.get('message', '')}", 'warn')
+                    return {}
+                return data.get('body', {}) or {}
+            write_log(f"Web Ajax HTTP {r.status_code}: {path}", 'warn')
+            return {}
+        except Exception as e:
+            write_log(f"Web Ajax failed: {e}", 'warn')
+            return {}
+
+    def illust_detail(self, iid: int) -> dict:
+        """Fetch full illust detail with complete caption / 获取完整作品详情"""
+        if not self.config.get('api.enable_web_ajax', True):
+            return {}
+        return self._request(f"illust/{iid}")
+
+    def novel_detail(self, nid: int) -> dict:
+        """Fetch novel detail / 获取小说详情"""
+        if not self.config.get('api.enable_web_ajax', True):
+            return {}
+        return self._request(f"novel/{nid}")
 
 # ============================================================
 # Pixiv API
@@ -719,6 +728,11 @@ class PixivAPI:
             kwargs['duration'] = duration
         return self._call_with_retry(self.api.search_illust, word, **kwargs)
 
+    def search_novel(self, word, sort='date_desc', offset=0):
+        self.ensure_login()
+        return self._call_with_retry(self.api.search_novel, word,
+                                     sort=sort, offset=offset)
+
     def get_ranking(self, mode='day', date=None, offset=0):
         self.ensure_login()
         return self._call_with_retry(self.api.illust_ranking, mode, date=date, offset=offset)
@@ -785,6 +799,23 @@ class PixivAPI:
         self.ensure_login()
         return self._call_with_retry(self.api.illust_bookmark_delete, iid)
 
+    def _get_executor(self):
+        if self._executor is None:
+            n = max(1, min(8, int(self.config.get('api.parallel_requests', 1))))
+            with self._executor_lock:
+                if self._executor is None:
+                    self._executor = ThreadPoolExecutor(max_workers=n,
+                                                       thread_name_prefix='pixiv-api')
+        return self._executor
+
+    def batch_call(self, fn, items, *args, **kwargs):
+        """Execute fn(item, *args, **kwargs) for each item in parallel"""
+        n = max(1, int(self.config.get('api.parallel_requests', 1)))
+        if n == 1:
+            return [fn(it, *args, **kwargs) for it in items]
+        executor = self._get_executor()
+        futures = [executor.submit(fn, it, *args, **kwargs) for it in items]
+        return [f.result() for f in futures]
 
 # ============================================================
 # ExifTool wrapper
@@ -882,8 +913,9 @@ class ExifToolWrapper:
 # Download worker
 # ============================================================
 class DownloadWorker:
-    def __init__(self, config, session: SessionManager):
+    def __init__(self, config, accounts, session: SessionManager):
         self.config = config
+        self.accounts = accounts
         self.session = session
         self.rate_limiter = RateLimiter()
         self.api = PixivAPI(config, self.rate_limiter)
@@ -910,6 +942,8 @@ class DownloadWorker:
 
         self.status_callback = None
         self.items_callback = None      # callback for items updates / 状态更新回调
+
+        self.web_ajax = WebAjaxClient(config, accounts, self.rate_limiter)
 
     def set_status_callback(self, cb):
         self.status_callback = cb
@@ -959,10 +993,10 @@ class DownloadWorker:
             pass
 
     def _current_workers(self) -> int:
-        mode = self.config.get("download_mode", "normal")
-        if mode == "normal":
+        mode = self.config.get('performance.download_mode', 'normal')
+        if mode == 'normal':
             return 1
-        return max(1, min(8, int(self.config.get("parallel_workers", 3))))
+        return max(1, int(self.config.get('performance._resolved_workers', 3)))
 
     def _save_queue(self):
         try:
@@ -992,6 +1026,41 @@ class DownloadWorker:
         except Exception as e:
             write_log(t('queue_save_failed', error=str(e)), 'error')
             return False
+    def _fetch_illust_detail(self, iid: int, cached_meta=None) -> dict:
+        """
+        Priority:
+        1. Cached metadata (from list results)
+        2. App API (fast)
+        3. Web Ajax (if enabled + PHPSESSID set) — merged for caption
+        """
+        if cached_meta and cached_meta.get('illust'):
+            info = dict(cached_meta['illust'])
+        else:
+            info = self.api.get_illust_detail(iid)
+
+        if not info:
+            return {}
+
+        # If caption is missing and Web Ajax is available, enrich / 若 caption 为空则补全
+        if not info.get('caption') and self.config.get('api.enable_web_ajax', True):
+            web = self.web_ajax.illust_detail(iid)
+            if web:
+                # Web Ajax returns description field / Web 返回 description 字段
+                desc = web.get('description', '')
+                if desc:
+                    info['caption'] = desc
+                    write_log(f"Enriched caption from Web Ajax for {iid}", 'info')
+                # Also fill in other missing fields / 补充其他字段
+                for src_key, dst_key in [
+                    ('userName', None),
+                    ('userId', None),
+                    ('bookmarkCount', 'total_bookmarks'),
+                    ('viewCount', 'total_view'),
+                    ('likeCount', None),
+                ]:
+                    if dst_key and not info.get(dst_key):
+                        info[dst_key] = web.get(src_key)
+        return info
 
     def add_items(self, items: list):
         if self.processed_count > 0 and self.url_queue.empty() and not self.is_running:
@@ -1189,13 +1258,26 @@ class DownloadWorker:
         m = re.search(r'/artworks/(\d+)', url)
         if m:
             return 'illust', int(m.group(1))
+        m = re.search(r'/novel/show\.php\?id=(\d+)', url)
+        if m:
+            return 'novel', int(m.group(1))
         if url.isdigit():
+            # Ambiguous — default to illust; caller can override / 默认插画
             return 'illust', int(url)
         raise ValueError(url)
 
+    def _process_url(self, url, cached_meta=None):
+        typ, pid = self._parse_url(url)
+        if typ == 'illust':
+            return self._process_illust(pid, cached_meta=cached_meta)
+        elif typ == 'novel':
+            return self._process_novel(pid, cached_meta=cached_meta)
+        return False, None, None, None
+
     def _process_illust(self, iid, cached_meta=None):
-        self._update_item_status(iid, status='processing', stage='fetching',
-                                 progress=0, title='', error='')
+        info = self._fetch_illust_detail(iid, cached_meta=cached_meta)
+        if info and info.get('type') == 'ugoira':
+            return self._process_ugoira(iid, cached_meta={'illust': info})
 
         if cached_meta and cached_meta.get('illust'):
             info = cached_meta['illust']
@@ -1345,6 +1427,296 @@ class DownloadWorker:
         })
         return True, iid, (saved[0] if saved else None), metadata
 
+    def _process_ugoira(self, iid, cached_meta=None):
+        """
+        Ugoira download:
+        1. Fetch metadata (frames + zip_url)
+        2. Download ZIP, extract frames
+        3. Compose APNG via PIL
+        4. Write metadata via ExifTool
+        """
+        self._update_item_status(iid, status='processing', stage='fetching',
+                                 progress=0, title='')
+
+        # Fetch illust metadata for title/author/tags / 获取作品基础信息
+        info = self._fetch_illust_detail(iid, cached_meta=cached_meta)
+        if not info:
+            self._update_item_status(iid, status='failed', stage='fetch',
+                                     error='fetch_failed')
+            return False, iid, None, None
+
+        title = info.get('title', '')
+        author = info.get('user', {}).get('name', '')
+        author_id = info.get('user', {}).get('id')
+        create_date = info.get('create_date', '')
+        caption = info.get('caption', '')
+        tags = info.get('tags', [])
+        page_count = info.get('page_count', 1)
+        restr_attrs = info.get('restriction_attributes', [])
+        ai_type = info.get('illust_ai_type', 0)
+        x_restrict = info.get('x_restrict', 0)
+
+        self._update_item_status(iid, title=title, stage='fetching_meta',
+                                 progress=10)
+
+        # Fetch ugoira metadata / 获取动图元数据
+        try:
+            um = self.api.api.ugoira_metadata(iid)
+            ugoira = um.get('ugoira_metadata', {})
+            zip_url = ugoira.get('zip_urls', {}).get('medium', '')
+            frames = ugoira.get('frames', [])
+        except Exception as e:
+            write_log(f"ugoira_metadata failed: {e}", 'error')
+            self._update_item_status(iid, status='failed', stage='meta',
+                                     error=str(e))
+            return False, iid, None, None
+
+        if not zip_url or not frames:
+            self._update_item_status(iid, status='failed', stage='meta',
+                                     error='no_frames')
+            return False, iid, None, None
+
+        # Download ZIP / 下载 ZIP
+        self._update_item_status(iid, stage='downloading_zip', progress=20)
+        temp_dir = self.download_dir / "_ugoira_tmp" / str(iid)
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        zip_path = temp_dir / "frames.zip"
+
+        headers = {
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) "
+                           "Chrome/121.0.0.0 Safari/537.36"),
+            "Referer": "https://www.pixiv.net/",
+        }
+        try:
+            r = requests.get(zip_url, headers=headers, stream=True, timeout=60)
+            r.raise_for_status()
+            with open(zip_path, 'wb') as f:
+                for chunk in r.iter_content(8192):
+                    f.write(chunk)
+        except Exception as e:
+            write_log(f"Ugoira ZIP download failed: {e}", 'error')
+            self._update_item_status(iid, status='failed', stage='download',
+                                     error='zip_failed')
+            return False, iid, None, None
+
+        # Extract frames / 解压序列帧
+        self._update_item_status(iid, stage='extracting', progress=40)
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as z:
+                z.extractall(temp_dir)
+        except Exception as e:
+            write_log(f"Ugoira extraction failed: {e}", 'error')
+            self._update_item_status(iid, status='failed', stage='extract',
+                                     error=str(e))
+            return False, iid, None, None
+
+        # Compose APNG / 合成 APNG
+        self._update_item_status(iid, stage='composing', progress=60)
+        filename = f"{iid}.png"
+        apng_path = self.download_dir / filename
+
+        try:
+            frame_files = []
+            delays = []
+            for fr in frames:
+                fname = fr.get('file', '')
+                delay = fr.get('delay', 100)
+                fpath = temp_dir / fname
+                if fpath.exists():
+                    frame_files.append(fpath)
+                    delays.append(delay)
+
+            if not frame_files:
+                raise RuntimeError("no frames extracted")
+
+            images = [Image.open(p).convert('RGBA') for p in frame_files]
+            # PIL APNG save / PIL 保存 APNG
+            images[0].save(
+                apng_path,
+                save_all=True,
+                append_images=images[1:],
+                duration=delays,
+                loop=0,
+                format='PNG',
+                optimize=False,
+            )
+            for img in images:
+                img.close()
+        except Exception as e:
+            write_log(f"APNG composition failed: {e}", 'error')
+            self._update_item_status(iid, status='failed', stage='compose',
+                                     error=str(e))
+            return False, iid, None, None
+
+        # Cleanup temp / 清理临时目录
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+        # Write metadata / 写入元数据
+        self._update_item_status(iid, stage='writing_meta', progress=85)
+
+        tag_names = [t.get('name', '') for t in tags]
+        trans_names = [t.get('translated_name', '') for t in tags]
+        tag_strs = []
+        for i, n in enumerate(tag_names):
+            tr = trans_names[i] if i < len(trans_names) else ''
+            tag_strs.append(f"{n}({tr})" if tr else n)
+
+        pri = []
+        if ai_type == 2:
+            pri.append(meta('ai_generated'))
+        if x_restrict == 1:
+            pri.append("R-18")
+        elif x_restrict == 2:
+            pri.append("R-18G")
+        if restr_attrs:
+            pri.append("R-15")
+        pri.append("ugoira")
+        final_tags = pri + tag_strs
+
+        cap = self._clean_caption(caption)
+        desc = f"{meta('source_url')}: https://www.pixiv.net/artworks/{iid}"
+        if cap:
+            desc += f"\n{meta('description')}: {cap}"
+
+        metadata = {
+            "XMP-dc:title": title,
+            "EXIF:ImageDescription": title,
+            "XMP-dc:creator": author,
+            "EXIF:Artist": author,
+            "XMP-dc:subject": final_tags,
+            "EXIF:XPKeywords": ",".join(final_tags),
+            "XMP:CreateDate": create_date,
+            "XMP:MetadataDate": create_date,
+            "EXIF:DateTimeOriginal": create_date,
+            "XMP-dc:description": desc,
+            "EXIF:XPComment": f"{meta('source_url')}: https://www.pixiv.net/artworks/{iid}",
+            "XMP-dc:type": "ugoira",
+        }
+        self.exiftool.write_metadata(apng_path, metadata,
+                                     ignore_minor=True, export_json=False)
+
+        self._update_item_status(iid, status='success', stage='done', progress=100)
+
+        # History / 历史记录
+        append_history({
+            'id': iid, 'title': title, 'page_count': 1,
+            'author': author, 'author_id': author_id,
+            'tags': final_tags,
+            'ai_generated': ai_type == 2,
+            'sensitive': x_restrict > 0 or bool(restr_attrs),
+            'restriction': pri[0] if pri and pri[0].startswith('R-') else '',
+            'type': 'ugoira',
+            'publish_time': format_date(create_date),
+            'downloaded_at': int(time.time()),
+        })
+
+        return True, iid, apng_path, metadata
+
+    def _process_novel(self, nid, cached_meta=None):
+        """
+        Novel download:
+        - App API: novel_detail + novel_text (pixivpy 3.7.5+)
+        - Output: Markdown with YAML frontmatter
+        - Metadata: XMP written via ExifTool to the .md file (or sidecar)
+        """
+        self._update_item_status(nid, status='processing', stage='fetching',
+                                 progress=0, title='')
+
+        info = self.api.get_novel_detail(nid)
+        if not info:
+            self._update_item_status(nid, status='failed', stage='fetch',
+                                     error='fetch_failed')
+            return False, nid, None, None
+
+        title = info.get('title', '')
+        author = info.get('user', {}).get('name', '')
+        author_id = info.get('user', {}).get('id')
+        create_date = info.get('create_date', '')
+        caption = info.get('caption', '')
+        tags = info.get('tags', [])
+        tag_names = [t.get('name', '') for t in tags]
+
+        self._update_item_status(nid, title=title, stage='fetching_text',
+                                 progress=15)
+
+        # Fetch full text / 获取正文
+        try:
+            text_resp = self.api.api.novel_text(nid)
+            novel_text = text_resp.get('novel_text', '') if text_resp else ''
+        except Exception as e:
+            write_log(f"novel_text failed: {e}", 'error')
+            novel_text = ''
+            self._update_item_status(nid, status='failed', stage='text',
+                                     error='text_fetch_failed')
+            return False, nid, None, None
+
+        self._update_item_status(nid, stage='writing', progress=60)
+
+        # Build Markdown / 生成 Markdown
+        safe_title = re.sub(r'[\\/:*?"<>|]', '_', title)[:80]
+        filename = f"{nid}_{safe_title}.md"
+        save_path = self.download_dir / "novels"
+        save_path.mkdir(exist_ok=True)
+        md_path = save_path / filename
+
+        frontmatter = {
+            'id': nid,
+            'title': title,
+            'author': author,
+            'author_id': author_id,
+            'create_date': create_date,
+            'tags': tag_names,
+            'source': f"https://www.pixiv.net/novel/show.php?id={nid}",
+        }
+
+        yaml_lines = ['---']
+        for k, v in frontmatter.items():
+            if isinstance(v, list):
+                yaml_lines.append(f"{k}:")
+                for item in v:
+                    yaml_lines.append(f"  - {json.dumps(item, ensure_ascii=False)}")
+            else:
+                yaml_lines.append(f"{k}: {json.dumps(v, ensure_ascii=False)}")
+        yaml_lines.append('---')
+        yaml_lines.append('')
+        yaml_lines.append(f"# {title}")
+        yaml_lines.append('')
+        if caption:
+            yaml_lines.append(self._clean_caption(caption))
+            yaml_lines.append('')
+        yaml_lines.append(novel_text)
+
+        content = '\n'.join(yaml_lines)
+        try:
+            md_path.write_text(content, encoding='utf-8')
+        except Exception as e:
+            write_log(f"Novel write failed: {e}", 'error')
+            self._update_item_status(nid, status='failed', stage='write',
+                                     error=str(e))
+            return False, nid, None, None
+
+        self._update_item_status(nid, stage='writing_meta', progress=85)
+
+        # Write metadata via ExifTool / 写入元数据
+        metadata = {
+            "XMP-dc:title": title,
+            "XMP-dc:creator": author,
+            "XMP-dc:subject": tag_names,
+            "XMP-dc:description": self._clean_caption(caption) or f"Source: https://www.pixiv.net/novel/show.php?id={nid}",
+            "XMP-dc:type": "novel",
+            "XMP:CreateDate": create_date,
+            "XMP:MetadataDate": create_date,
+        }
+        ok, _ = self.exiftool.write_metadata(md_path, metadata,
+                                             ignore_minor=True, export_json=False)
+
+        self._update_item_status(nid, status='success', stage='done', progress=100)
+        return True, nid, md_path, metadata
+    
     def _clean_caption(self, caption):
         if not caption:
             return ""
@@ -1623,7 +1995,12 @@ async def handle_command(bridge, cmd, ws):
         end_date = cmd.get('end_date', '') or None
         pages = max(1, min(200, int(cmd.get('pages', 1))))
         start_page = max(1, int(cmd.get('start_page', 1)))
-        filters = cmd.get('filters', {'illust': True, 'manga': True})
+        filters = cmd.get('filters', {
+            'illust': True,
+            'manga': True,
+            'novel': False,
+            'ugoira': False,
+        })
         loop = asyncio.get_event_loop()
 
         if start_date and end_date:
@@ -1637,6 +2014,7 @@ async def handle_command(bridge, cmd, ws):
                                               'msg': 'Start date must be <= end date'}))
                 return
             duration = None
+
 
         def do_search():
             results = []
@@ -1667,6 +2045,10 @@ async def handle_command(bridge, cmd, ws):
                 if ty == 'illust' and filters.get('illust'):
                     filtered.append(it)
                 elif ty == 'manga' and filters.get('manga'):
+                    filtered.append(it)
+                elif ty == 'novel' and filters.get('novel'):
+                    filtered.append(it)
+                elif ty == 'ugoira' and filters.get('ugoira'):
                     filtered.append(it)
             return filtered
 
@@ -2332,10 +2714,13 @@ async def handle_command(bridge, cmd, ws):
 
     elif c == 'save_config':
         for k, v in cmd.get('data', {}).items():
-            bridge.config.set(k, v)
-        bridge.worker.download_dir = Path(bridge.config.get('download_dir'))
+            if k == 'webapi.PHPSESSID':
+                bridge.accounts.set_phpsessid(str(v))
+            else:
+                bridge.config.set(k, v)
+        # Refresh auto workers if parallel_workers changed
+        bridge.config._resolve_auto_workers()
         await ws.send_str(json.dumps({'type': 'success', 'msg': 'Config saved'}))
-        await ws.send_str(json.dumps(bridge._queue_status_payload()))
 
     elif c == 'set_download_mode':
         mode = cmd.get('mode', 'normal')
@@ -2588,10 +2973,15 @@ async def main_async(port, config, accounts, session):
 def main():
     set_language(peek_language())
     setup_logging()
-
     write_log(t('starting'), 'info')
 
-    config = ConfigManager()
+    config = ConfigManager()   # 内部调用 _resolve_auto_workers
+
+    # Log detected workers / 输出检测结果
+    workers = config.get('performance._resolved_workers')
+    mode = config.get('performance.download_mode')
+    write_log(f"Download mode: {mode}, workers: {workers}", 'info')
+
     final_lang = config.effective_language()
     set_language(final_lang)
     write_log(t('language_loaded', lang=final_lang), 'info')

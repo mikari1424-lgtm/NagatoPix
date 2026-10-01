@@ -323,6 +323,16 @@ const I18N = {
         dl_stage_done: "完成",
         dl_stage_error: "错误",
         dl_stage_retry: "重试",
+        settings_api: "API",
+        settings_request_delay: "请求间隔(秒):",
+        settings_parallel_requests: "并行请求:",
+        settings_enable_web_ajax: "启用 Web Ajax API（获取完整 caption）",
+        settings_phpsessid: "PHPSESSID:",
+        phpsessid_ph: "从浏览器 DevTools 复制",
+        phpsessid_hint:
+            "PHPSESSID 易过期，失效后 caption 将回退到 App API 版本。",
+        type_novel: "小说",
+        type_ugoira: "动图",
     },
     en: {
         connecting: "Connecting...",
@@ -647,6 +657,16 @@ const I18N = {
         dl_stage_done: "Done",
         dl_stage_error: "Error",
         dl_stage_retry: "Retrying",
+        settings_api: "API",
+        settings_request_delay: "Request delay(s):",
+        settings_parallel_requests: "Parallel requests:",
+        settings_enable_web_ajax: "Enable Web Ajax API (full caption)",
+        settings_phpsessid: "PHPSESSID:",
+        phpsessid_ph: "Copy from browser DevTools",
+        phpsessid_hint:
+            "PHPSESSID expires quickly; caption falls back to App API when invalid.",
+        type_novel: "Novel",
+        type_ugoira: "Ugoira",
     },
 };
 
