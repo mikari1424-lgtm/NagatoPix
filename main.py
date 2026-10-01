@@ -28,7 +28,7 @@ import requests
 import aiohttp
 from aiohttp import web
 from bs4 import BeautifulSoup
-from pixivpy3 import AppPixivAPI
+from pixivpy3 import AppPixivAPI, PixivError
 
 try:
     import tomllib
