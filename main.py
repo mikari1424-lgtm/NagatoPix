@@ -154,7 +154,6 @@ class ConfigManager:
     LEGACY_CONFIG_FILE = get_app_dir() / "pixiv_client_config.json"
 
     DEFAULT_CONFIG = {
-        'refresh_token': '',
         'download_dir': str(Path.home() / "Pictures" / "Pixiv"),
         'proxy': '',
         'language': 'auto',
@@ -169,8 +168,8 @@ class ConfigManager:
             'request_delay': 0.3,
             'rate_limit_wait': 150.0,
             'max_results': 30,
-            'enable_web_ajax': True,
             'parallel_requests': 1,
+            'web_ajax_mode': 'disabled',
         },
     }
 
@@ -185,7 +184,7 @@ class ConfigManager:
     }
 
     STRING_FIELDS = (
-        'refresh_token', 'download_dir', 'proxy', 'language', 'theme',
+        'download_dir', 'proxy', 'language', 'theme',
     )
 
     def __init__(self):
@@ -242,11 +241,12 @@ class ConfigManager:
         return json.loads(json.dumps(self.DEFAULT_CONFIG))
 
     def _merge_defaults(self, cfg: dict) -> dict:
-        """Merge loaded config into defaults / 将加载的配置合并到默认值"""
         result = self._default_copy()
         for k, v in cfg.items():
+            if k == 'refresh_token':
+                # Migrate below, don't copy / 稍后迁移，不复制
+                continue
             if k in ('performance', 'api') and isinstance(v, dict):
-                # Merge nested sections / 合并嵌套段
                 for sk, sv in v.items():
                     result[k][sk] = sv
             elif k in result:
@@ -306,6 +306,10 @@ class ConfigManager:
             result['theme'] = 'dark'
         if result.get('performance', {}).get('download_mode') not in ('normal', 'high'):
             result['performance']['download_mode'] = 'normal'
+        if result.get('api', {}).get('web_ajax_mode') not in (
+            'disabled', 'illust_only', 'illust_user', 'global'
+        ):
+            result['api']['web_ajax_mode'] = 'disabled'
 
         return result, errors
 
@@ -404,8 +408,6 @@ class ConfigManager:
 # Accounts / 账户
 # ============================================================
 class AccountsManager:
-    """Multi-account storage / 多账号存储"""
-
     def __init__(self, config):
         self.config = config
         self.data = self._load()
@@ -417,32 +419,33 @@ class AccountsManager:
             try:
                 with open(ACCOUNTS_FILE, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                # Old format (single account) / 旧格式
+                # Normalize structure / 规范化结构
                 if 'accounts' not in data:
-                    return {
+                    # Old single-account format / 旧单账号格式
+                    data = {
                         'current_index': 0,
                         'accounts': [{
-                            'refresh_token': self.config.get('refresh_token', ''),
+                            'refresh_token': data.get('refresh_token', ''),
                             'profile': data.get('profile', {}),
                             'following': data.get('following', []),
                             'bookmarks': data.get('bookmarks', []),
-                        }]
+                        }] if data.get('profile') or data.get('refresh_token') else [],
+                        'webapi': {'PHPSESSID': ''},
                     }
+                data.setdefault('current_index', 0)
+                data.setdefault('accounts', [])
                 data.setdefault('webapi', {'PHPSESSID': ''})
                 return data
             except Exception as e:
                 write_log(f"accounts.json load failed: {e}", 'warn')
-        return {'current_index': 0, 'accounts': []}
-
-    def get_phpsessid(self) -> str:
-        return self.data.get('webapi', {}).get('PHPSESSID', '')
-
-    def set_phpsessid(self, value: str):
-        self.data.setdefault('webapi', {})['PHPSESSID'] = value
-        self.save()
+        return {
+            'current_index': 0,
+            'accounts': [],
+            'webapi': {'PHPSESSID': ''},
+        }
 
     def _ensure_migration(self):
-        """Migrate from config.toml if no accounts exist / 从 config 迁移"""
+        """Migrate from config.toml if no accounts / 从 config 迁移"""
         if not self.data['accounts']:
             rt = self.config.get('refresh_token', '')
             if rt:
@@ -456,11 +459,12 @@ class AccountsManager:
                 self.save()
                 write_log("Migrated refresh_token from config.toml", 'info')
         else:
+            # Sync config with the currently-selected account
             idx = self.data.get('current_index', 0)
             if 0 <= idx < len(self.data['accounts']):
                 cur_rt = self.data['accounts'][idx].get('refresh_token', '')
-                if cur_rt and cur_rt != self.config.get('refresh_token'):
-                    self.config.set('refresh_token', cur_rt)
+                if cur_rt:
+                    self.config.config.pop('refresh_token', None)
 
     def save(self):
         try:
@@ -469,98 +473,131 @@ class AccountsManager:
         except Exception as e:
             write_log(f"accounts.json save failed: {e}", 'error')
 
+    # ------------------------------------------------------------
+    # Current account accessors — defensive / 当前账号访问器
+    # ------------------------------------------------------------
+    def get_current(self) -> dict:
+        """Return the current account dict / 返回当前账号字典"""
+        accounts = self.data.get('accounts', [])
+        if not accounts:
+            return {}
+        idx = self.data.get('current_index', 0)
+        if not (0 <= idx < len(accounts)):
+            idx = 0
+            self.data['current_index'] = 0
+        return accounts[idx]
+
+    def get_current_refresh_token(self) -> str:
+        """Return the current account's refresh_token / 返回当前账号的 RefreshToken"""
+        acct = self.get_current()
+        return (acct.get('refresh_token') or '').strip()
+
+    def get_current_profile(self) -> dict:
+        acct = self.get_current()
+        return acct.get('profile', {}) if acct else {}
+
+    def set_current_profile(self, profile: dict):
+        acct = self.get_current()
+        if not acct:
+            return
+        acct['profile'] = profile
+        self.save()
+
+    def get_current_following(self) -> list:
+        acct = self.get_current()
+        return acct.get('following', []) if acct else []
+
+    def set_current_following(self, items: list):
+        acct = self.get_current()
+        if not acct:
+            return
+        acct['following'] = items
+        self.save()
+
+    def get_current_bookmarks(self) -> list:
+        acct = self.get_current()
+        return acct.get('bookmarks', []) if acct else []
+
+    def set_current_bookmarks(self, items: list):
+        acct = self.get_current()
+        if not acct:
+            return
+        acct['bookmarks'] = items
+        self.save()
+
+    # ------------------------------------------------------------
+    # PHPSESSID / Web Ajax
+    # ------------------------------------------------------------
+    def get_phpsessid(self) -> str:
+        return self.data.get('webapi', {}).get('PHPSESSID', '')
+
+    def set_phpsessid(self, value: str):
+        self.data.setdefault('webapi', {})['PHPSESSID'] = value
+        self.save()
+
+    # ------------------------------------------------------------
+    # Account management / 账号管理
+    # ------------------------------------------------------------
     def list_accounts(self) -> list:
         out = []
-        for i, acc in enumerate(self.data['accounts']):
-            p = acc.get('profile', {})
+        for i, acc in enumerate(self.data.get('accounts', [])):
+            p = acc.get('profile', {}) or {}
+            rt = acc.get('refresh_token', '') or ''
             out.append({
                 'index': i,
                 'id': p.get('id'),
                 'name': p.get('name', ''),
                 'account': p.get('account', ''),
                 'avatar': p.get('avatar', ''),
+                'refresh_token': rt,               # NEW: expose for UI
+                'refresh_token_preview': (rt[:8] + '...' + rt[-6:]) if len(rt) > 20 else rt,
                 'is_current': i == self.data.get('current_index', 0),
             })
         return out
 
-    def get_current(self):
-        idx = self.data.get('current_index', 0)
-        if 0 <= idx < len(self.data['accounts']):
-            return self.data['accounts'][idx]
-        return None
-
-    def get_current_profile(self) -> dict:
-        cur = self.get_current()
-        return cur.get('profile', {}) if cur else {}
-
-    def set_current_profile(self, profile: dict):
-        idx = self.data.get('current_index', 0)
-        if 0 <= idx < len(self.data['accounts']):
-            self.data['accounts'][idx]['profile'] = profile
-            self.save()
-
-    def set_current_following(self, items: list):
-        idx = self.data.get('current_index', 0)
-        if 0 <= idx < len(self.data['accounts']):
-            self.data['accounts'][idx]['following'] = items
-            self.save()
-
-    def get_current_following(self) -> list:
-        cur = self.get_current()
-        return cur.get('following', []) if cur else []
-
-    def set_current_bookmarks(self, items: list):
-        idx = self.data.get('current_index', 0)
-        if 0 <= idx < len(self.data['accounts']):
-            self.data['accounts'][idx]['bookmarks'] = items
-            self.save()
-
-    def get_current_bookmarks(self) -> list:
-        cur = self.get_current()
-        return cur.get('bookmarks', []) if cur else []
-
     def add_account(self, refresh_token: str) -> int:
-        for i, acc in enumerate(self.data['accounts']):
+        refresh_token = refresh_token.strip()
+        for i, acc in enumerate(self.data.get('accounts', [])):
             if acc.get('refresh_token') == refresh_token:
                 self.data['current_index'] = i
-                self.config.set('refresh_token', refresh_token)
                 self.save()
                 return i
-        self.data['accounts'].append({
+        self.data.setdefault('accounts', []).append({
             'refresh_token': refresh_token,
             'profile': {},
             'following': [],
             'bookmarks': [],
         })
         self.data['current_index'] = len(self.data['accounts']) - 1
-        self.config.set('refresh_token', refresh_token)
         self.save()
         return self.data['current_index']
 
     def switch_account(self, index: int) -> bool:
-        if 0 <= index < len(self.data['accounts']):
+        accounts = self.data.get('accounts', [])
+        if 0 <= index < len(accounts):
             self.data['current_index'] = index
-            rt = self.data['accounts'][index].get('refresh_token', '')
-            self.config.set('refresh_token', rt)
             self.save()
             return True
         return False
 
     def remove_account(self, index: int) -> bool:
-        if 0 <= index < len(self.data['accounts']):
-            self.data['accounts'].pop(index)
-            if not self.data['accounts']:
+        accounts = self.data.get('accounts', [])
+        if 0 <= index < len(accounts):
+            accounts.pop(index)
+            if not accounts:
                 self.data['current_index'] = 0
             else:
                 self.data['current_index'] = min(
                     self.data.get('current_index', 0),
-                    len(self.data['accounts']) - 1
+                    len(accounts) - 1
                 )
-                cur_rt = self.data['accounts'][self.data['current_index']].get('refresh_token', '')
-                self.config.set('refresh_token', cur_rt)
             self.save()
             return True
         return False
+
+    def get_current_refresh_token(self) -> str:
+        cur = self.get_current()
+        return cur.get('refresh_token', '') if cur else ''
 
 # ============================================================
 # Session / 会话（合并 queue.json）
@@ -751,15 +788,51 @@ class RateLimiter:
                 pass
 
 class WebAjaxClient:
-    """Pixiv Web Ajax API client (requires PHPSESSID) / 网页版 API 客户端"""
+    """Pixiv Web Ajax API client / 网页版 API 客户端"""
 
     BASE = "https://www.pixiv.net/ajax"
+
+    # Mode constants / 模式常量
+    MODE_DISABLED     = 'disabled'
+    MODE_ILLUST_ONLY  = 'illust_only'
+    MODE_ILLUST_USER  = 'illust_user'
+    MODE_GLOBAL       = 'global'
 
     def __init__(self, config, accounts, rate_limiter):
         self.config = config
         self.accounts = accounts
-        self.rate_limiter = rate_limiter   # shared with App API / 与 App API 共用
+        self.rate_limiter = rate_limiter
 
+    # ------------------------------------------------------------
+    # Availability / 可用性
+    # ------------------------------------------------------------
+    def is_available(self) -> bool:
+        if not self.accounts:
+            return False
+        if not self.accounts.get_phpsessid():
+            return False
+        mode = self.config.get('api.web_ajax_mode', self.MODE_DISABLED)
+        return mode != self.MODE_DISABLED
+
+    def _use_for(self, feature: str) -> bool:
+        """
+        feature: 'illust' | 'user' | 'list'
+        / 判定某功能是否走 Ajax
+        """
+        if not self.is_available():
+            return False
+        mode = self.config.get('api.web_ajax_mode', self.MODE_DISABLED)
+        if mode == self.MODE_ILLUST_ONLY:
+            return feature == 'illust'
+        if mode == self.MODE_ILLUST_USER:
+            return feature in ('illust', 'user')
+        if mode == self.MODE_GLOBAL:
+            return True
+        return False
+
+    # ------------------------------------------------------------
+    # Low-level request / 底层请求
+    # ------------------------------------------------------------
     def _headers(self) -> dict:
         return {
             "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -771,62 +844,109 @@ class WebAjaxClient:
         }
 
     def _request(self, path: str, params: dict = None) -> dict:
-        sessid = self.accounts.get_phpsessid()
-        if not sessid:
-            return {}
-        # Use global rate limiter / 使用全局限速器
         self.rate_limiter.wait_if_limited()
         try:
             r = requests.get(f"{self.BASE}/{path}",
                              params=params or {},
                              headers=self._headers(),
                              timeout=15)
-            if r.status_code == 200:
-                data = r.json()
-                if data.get('error'):
-                    write_log(f"Web Ajax error: {data.get('message', '')}", 'warn')
-                    return {}
-                return data.get('body', {}) or {}
-            write_log(f"Web Ajax HTTP {r.status_code}: {path}", 'warn')
-            return {}
+            if r.status_code != 200:
+                write_log(f"Web Ajax HTTP {r.status_code}: {path}", 'warn')
+                return {}
+            data = r.json()
+            if data.get('error'):
+                write_log(f"Web Ajax error: {data.get('message', '')}", 'warn')
+                return {}
+            return data.get('body', {}) or {}
         except Exception as e:
             write_log(f"Web Ajax failed: {e}", 'warn')
             return {}
 
+    # ------------------------------------------------------------
+    # Feature endpoints / 各功能接口
+    # ------------------------------------------------------------
     def illust_detail(self, iid: int) -> dict:
-        """Fetch full illust detail with complete caption / 获取完整作品详情"""
-        if not self.config.get('api.enable_web_ajax', True):
+        if not self._use_for('illust'):
             return {}
         return self._request(f"illust/{iid}")
 
-    def novel_detail(self, nid: int) -> dict:
-        """Fetch novel detail / 获取小说详情"""
-        if not self.config.get('api.enable_web_ajax', True):
+    def user_detail(self, uid: int) -> dict:
+        if not self._use_for('user'):
             return {}
-        return self._request(f"novel/{nid}")
+        return self._request(f"user/{uid}")
+
+    def search_illust(self, word: str, mode: str = 's_tag_full',
+                      order: str = 'date_d', offset: int = 0,
+                      search_type: str = 'all') -> dict:
+        """Note: Web search uses different params / 网页搜索参数不同"""
+        if not self._use_for('list'):
+            return {}
+        # Web 搜索接口: /ajax/search/artworks/{word}
+        return self._request(
+            f"search/artworks/{word}",
+            params={
+                'word': word,
+                'order': order,
+                'mode': 'all',
+                's_mode': mode,
+                'type': search_type,
+                'p': (offset // 60) + 1,    # Web 分页从 1 开始
+                'lang': 'zh',
+            }
+        )
+
+    def ranking(self, mode: str = 'day', page: int = 1) -> dict:
+        """Web ranking endpoint / 网页排行榜"""
+        if not self._use_for('list'):
+            return {}
+        return self._request(f"illust/ranking",
+                             params={'mode': mode, 'page': page, 'lang': 'zh'})
 
 # ============================================================
 # Pixiv API
 # ============================================================
 class PixivAPI:
-    def __init__(self, config, rate_limiter):
+    def __init__(self, config, rate_limiter, accounts=None):
         self.config = config
         self.rate_limiter = rate_limiter
+        self.accounts = accounts
+        self.web_ajax = WebAjaxClient(config, accounts, rate_limiter) if accounts else None
         self.api = None
         self.logged_in = False
         self._lock = threading.Lock()
+        self._executor = None
+        self._executor_lock = threading.Lock()
 
+    # ------------------------------------------------------------
+    # Login — reads refresh_token from accounts.json only
+    # / 登录：只从 accounts.json 读凭据
+    # ------------------------------------------------------------
     def login(self):
         if self.api is None:
             self.api = AppPixivAPI()
-            proxy = self.config.get("proxy")
+            proxy = self.config.get('proxy')
             if proxy:
                 self.api.set_proxy(proxy)
-        rt = self.config.get("refresh_token")
+
+        rt = ''
+        if self.accounts:
+            rt = self.accounts.get_current_refresh_token()
+
         if not rt:
-            write_log(t('no_token'), 'error')
+            # Diagnostic log / 诊断日志
+            try:
+                accounts_data = self.accounts.data if self.accounts else {}
+                n = len(accounts_data.get('accounts', []))
+                idx = accounts_data.get('current_index', 0)
+                write_log(
+                    f"No refresh token available "
+                    f"(accounts={n}, current_index={idx})",
+                    'error')
+            except Exception:
+                write_log("No refresh token available", 'error')
             self.logged_in = False
             return False
+
         try:
             self.api.auth(refresh_token=rt)
             self.logged_in = True
@@ -869,8 +989,30 @@ class PixivAPI:
         raise Exception(t('api_retry_exhausted'))
 
     def get_illust_detail(self, iid):
+        # App API baseline / App API 基础数据
         self.ensure_login()
-        return self._call_with_retry(self.api.illust_detail, iid).get("illust", {})
+        try:
+            app_info = self._call_with_retry(self.api.illust_detail, iid).get("illust", {}) or {}
+        except Exception:
+            app_info = {}
+
+        # Enrich with Web Ajax if enabled / 若启用 Ajax 则补全
+        if self.web_ajax and self.web_ajax._use_for('illust'):
+            web = self.web_ajax.illust_detail(iid)
+            if web:
+                if web.get('description') and not app_info.get('caption'):
+                    app_info['caption'] = web['description']
+                    write_log(f"Enriched caption from Web Ajax for {iid}", 'info')
+                # Fallback for other fields / 其他字段补充
+                for src, dst in [
+                    ('bookmarkCount', 'total_bookmarks'),
+                    ('viewCount', 'total_view'),
+                    ('userName', None),
+                ]:
+                    if dst and not app_info.get(dst):
+                        app_info[dst] = web.get(src)
+
+        return app_info
 
     def search_illust(self, word, target='exact_match_for_tags', sort='date_desc',
                       offset=0, duration=None, start_date=None, end_date=None):
@@ -898,7 +1040,20 @@ class PixivAPI:
 
     def get_user_detail(self, uid):
         self.ensure_login()
-        return self._call_with_retry(self.api.user_detail, uid)
+        try:
+            data = self._call_with_retry(self.api.user_detail, uid) or {}
+        except Exception:
+            data = {}
+
+        if self.web_ajax and self.web_ajax._use_for('user'):
+            web = self.web_ajax.user_detail(uid)
+            if web:
+                user = data.setdefault('user', {})
+                if web.get('comment') and not user.get('comment'):
+                    user['comment'] = web['comment']
+                    write_log(f"Enriched user comment from Web Ajax for {uid}", 'info')
+
+        return data
 
     def get_user_illusts(self, uid, offset=0):
         self.ensure_login()
@@ -1068,12 +1223,12 @@ class ExifToolWrapper:
 # Download worker
 # ============================================================
 class DownloadWorker:
-    def __init__(self, config, accounts, session: SessionManager):
+    def __init__(self, config, session: SessionManager, accounts: AccountsManager):
         self.config = config
-        self.accounts = accounts
         self.session = session
+        self.accounts = accounts
         self.rate_limiter = RateLimiter()
-        self.api = PixivAPI(config, self.rate_limiter)
+        self.api = PixivAPI(config, self.rate_limiter, accounts=accounts)
         self.exiftool = ExifToolWrapper(str(get_resource_path("plugins/ExifTool.exe")))
         self.download_dir = Path(config.get("download_dir"))
         self.download_dir.mkdir(parents=True, exist_ok=True)
@@ -2871,11 +3026,14 @@ async def handle_command(bridge, cmd, ws):
         for k, v in cmd.get('data', {}).items():
             if k == 'webapi.PHPSESSID':
                 bridge.accounts.set_phpsessid(str(v))
+            elif k == 'refresh_token':
+                # Refresh token now managed by accounts / 由 accounts 管理
+                continue
             else:
                 bridge.config.set(k, v)
-        # Refresh auto workers if parallel_workers changed
         bridge.config._resolve_auto_workers()
         await ws.send_str(json.dumps({'type': 'success', 'msg': 'Config saved'}))
+        await ws.send_str(json.dumps(bridge._queue_status_payload()))
 
     elif c == 'set_download_mode':
         mode = cmd.get('mode', 'normal')
@@ -3124,6 +3282,31 @@ async def main_async(port, config, accounts, session):
     while True:
         await asyncio.sleep(3600)
 
+def migrate_legacy_refresh_token(config: ConfigManager, accounts: AccountsManager):
+    """Move refresh_token from config.toml to accounts.json once / 一次性迁移"""
+    # 从旧 config 读
+    legacy_rt = ''
+    if CONFIG_FILE.exists():
+        try:
+            with open(CONFIG_FILE, 'rb') as f:
+                raw = tomllib.load(f)
+            legacy_rt = raw.get('refresh_token', '') or ''
+        except Exception:
+            pass
+    elif LEGACY_CONFIG_FILE.exists():
+        try:
+            with open(LEGACY_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                legacy_rt = json.load(f).get('refresh_token', '') or ''
+        except Exception:
+            pass
+
+    if legacy_rt and not accounts.data['accounts']:
+        accounts.add_account(legacy_rt)
+        write_log("Migrated refresh_token from config to accounts.json", 'info')
+
+    # 从 config 中清除
+    if config.config.pop('refresh_token', None):
+        config.save()
 
 def main():
     set_language(peek_language())
@@ -3142,6 +3325,7 @@ def main():
     write_log(t('language_loaded', lang=final_lang), 'info')
 
     accounts = AccountsManager(config)
+    migrate_legacy_refresh_token(config, accounts)
     session = SessionManager()
 
     exiftool_path = get_resource_path("plugins/ExifTool.exe")
