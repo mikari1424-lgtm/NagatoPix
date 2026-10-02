@@ -40,6 +40,8 @@ let ivState = {
     pages: [],
     pageIdx: 0,
 };
+let currentAccounts = [];
+let currentAccountProfile = null;
 
 const tableItemGetters = {
     "ranking-list": () => rankingItems,
@@ -105,10 +107,14 @@ function handleMessage(msg) {
         case "items_added":
             break;
         case "account_result":
+            currentAccountProfile = msg.profile || {};
             renderAccount(msg.profile);
             break;
         case "account_list":
+            currentAccounts = msg.accounts || [];
             renderAccountList(msg.accounts, msg.current_index);
+            // Re-render account card to refresh token preview / 重渲染卡片
+            if (currentAccountProfile) renderAccount(currentAccountProfile);
             break;
         case "account_added":
             closeAddAccountModal();
@@ -1809,7 +1815,6 @@ function onThreadsChange() {
 
 // ============ Config ============
 const CONFIG_KEYS = [
-    "refresh_token",
     "download_dir",
     "proxy",
     "language",
@@ -2133,6 +2138,26 @@ function renderAccount(profile) {
                 onerror="this.onerror=null; this.removeAttribute('src');">`
         : '<div class="account-avatar"></div>';
 
+    // RefreshToken preview from current account / 当前账号的 Token 摘要
+    let rtPreview = "";
+    let rtFull = "";
+    try {
+        const idx = currentAccounts.findIndex((a) => a.is_current);
+        if (idx >= 0) {
+            rtFull = currentAccounts[idx].refresh_token || "";
+            rtPreview = currentAccounts[idx].refresh_token_preview || "";
+        }
+    } catch (e) {}
+
+    const rtHtml = rtPreview
+        ? `<div class="account-token" title="${escapeHtml(rtFull)}">
+              <span class="account-token-label">${t("account_refresh_token")}:</span>
+              <code class="account-token-value">${escapeHtml(rtPreview)}</code>
+              <button class="secondary account-token-btn"
+                      onclick="copyRefreshToken()">${t("btn_copy")}</button>
+           </div>`
+        : "";
+
     container.innerHTML = `
         <div class="account-card">
             ${avatarHtml}
@@ -2161,8 +2186,28 @@ function renderAccount(profile) {
                     </div>
                 </div>
                 ${profile.comment ? `<div class="account-comment">${escapeHtml(profile.comment)}</div>` : ""}
+                ${rtHtml}
             </div>
         </div>`;
+}
+
+function copyRefreshToken() {
+    try {
+        const idx = currentAccounts.findIndex((a) => a.is_current);
+        if (idx < 0) return;
+        const rt = currentAccounts[idx].refresh_token || "";
+        if (!rt) return;
+        navigator.clipboard
+            .writeText(rt)
+            .then(() => {
+                toast(t("toast_token_copied"), "success");
+            })
+            .catch(() => {
+                toast("Copy failed", "error");
+            });
+    } catch (e) {
+        toast("Copy failed", "error");
+    }
 }
 
 function loadFollowing() {
