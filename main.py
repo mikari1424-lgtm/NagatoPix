@@ -877,7 +877,9 @@ class WebAjaxClient:
     def user_detail(self, uid: int) -> dict:
         if not self._use_for('user'):
             return {}
-        return self._request(f"user/{uid}")
+        # full=1 is required for comment / commentHtml
+        # / full=1 才会返回 comment 与 commentHtml
+        return self._request(f"user/{uid}", params={'full': 1, 'lang': 'zh'})
 
     def search_illust(self, word: str, mode: str = 's_tag_full',
                       order: str = 'date_d', offset: int = 0,
@@ -987,28 +989,46 @@ class PixivAPI:
         raise Exception(t('api_retry_exhausted'))
 
     def get_illust_detail(self, iid):
-        # App API baseline / App API 基础数据
         self.ensure_login()
         try:
-            app_info = self._call_with_retry(self.api.illust_detail, iid).get("illust", {}) or {}
+            app_info = self._call_with_retry(
+                self.api.illust_detail, iid).get("illust", {}) or {}
         except Exception:
             app_info = {}
 
-        # Enrich with Web Ajax if enabled / 若启用 Ajax 则补全
         if self.web_ajax and self.web_ajax._use_for('illust'):
             web = self.web_ajax.illust_detail(iid)
             if web:
-                if web.get('description') and not app_info.get('caption'):
-                    app_info['caption'] = web['description']
-                    write_log(f"Enriched caption from Web Ajax for {iid}", 'info')
-                # Fallback for other fields / 其他字段补充
+                # Caption: prefer illustComment (unfiltered), then description
+                # / 说明：优先 illustComment（未过滤），再试 description
+                web_caption = web.get('illustComment') or web.get('description') or ''
+                if web_caption:
+                    if not app_info.get('caption') or \
+                       len(web_caption) > len(app_info.get('caption', '')):
+                        app_info['caption'] = web_caption
+                        write_log(
+                            f"Applied Ajax caption for {iid} "
+                            f"({len(web_caption)} chars)", 'info')
+
+                # Statistics fallback / 统计字段补充
                 for src, dst in [
                     ('bookmarkCount', 'total_bookmarks'),
                     ('viewCount', 'total_view'),
-                    ('userName', None),
+                    ('likeCount', 'total_like'),
+                    ('commentCount', 'total_comments'),
                 ]:
-                    if dst and not app_info.get(dst):
-                        app_info[dst] = web.get(src)
+                    if web.get(src) is not None and not app_info.get(dst):
+                        app_info[dst] = web[src]
+
+                # xRestrict, pageCount, dimensions fallback
+                if web.get('xRestrict') is not None and not app_info.get('x_restrict'):
+                    app_info['x_restrict'] = web['xRestrict']
+                if web.get('pageCount') and not app_info.get('page_count'):
+                    app_info['page_count'] = web['pageCount']
+                if web.get('width') and not app_info.get('width'):
+                    app_info['width'] = web['width']
+                if web.get('height') and not app_info.get('height'):
+                    app_info['height'] = web['height']
 
         return app_info
 
@@ -1047,59 +1067,100 @@ class PixivAPI:
             web = self.web_ajax.user_detail(uid)
             if web:
                 user = data.setdefault('user', {})
-                # Prefer commentHtml (preserves URLs); fallback to comment
-                # / 优先读 commentHtml（保留 URL），回退到 comment
-                web_comment = web.get('commentHtml') or web.get('comment') or ''
-                if web_comment:
-                    # Strip HTML tags but preserve links as plain text
-                    # / 剥离 HTML 标签但保留链接文本
-                    clean = self._html_to_text(web_comment)
-                    if clean and clean != user.get('comment', ''):
-                        user['comment'] = clean
-                        write_log(
-                            f"Enriched user comment from Web Ajax for {uid}",
-                            'info')
-                # Also fill in other fields from Web Ajax
-                # / 补充其他字段
-                for src, dst in [
-                    ('webpage', 'webpage'),
-                    ('twitter', 'twitter_account'),
-                    ('background', None),
-                ]:
-                    if dst and src in web and not user.get(dst):
-                        user[dst] = web.get(src)
+
+                # Prefer commentHtml (keeps URLs); fallback to comment
+                # / 优先 commentHtml（保留 URL），回退 comment
+                web_comment_html = web.get('commentHtml') or ''
+                web_comment_plain = web.get('comment') or ''
+
+                # Always override if Ajax has content / 有内容就覆盖
+                if web_comment_html:
+                    clean = self._html_to_text(web_comment_html)
+                    user['comment'] = clean
+                    write_log(
+                        f"Applied Ajax commentHtml for {uid} ({len(clean)} chars)",
+                        'info')
+                elif web_comment_plain:
+                    user['comment'] = web_comment_plain
+                    write_log(
+                        f"Applied Ajax comment for {uid} ({len(web_comment_plain)} chars)",
+                        'info')
+
+                # Fill supplementary fields from Ajax if missing
+                # / 补充 App API 缺失的字段
+                if not user.get('profile_image_urls'):
+                    img = web.get('imageBig') or web.get('image') or ''
+                    if img:
+                        user['profile_image_urls'] = {'medium': img}
+
+                # Region / webpage / twitter — extend the profile block
+                # / 地区 / 主页 / Twitter — 扩展 profile 块
+                profile = data.setdefault('profile', {})
+                region = web.get('region') or {}
+                if region.get('name') and not profile.get('region'):
+                    profile['region'] = region['name']
+
+                social = web.get('social') or {}
+                tw = (social.get('twitter') or {}).get('url')
+                if tw and not profile.get('twitter_account'):
+                    # Extract @handle if present, else store URL
+                    profile['twitter_url'] = tw
+
+                if web.get('webpage') and not profile.get('webpage'):
+                    profile['webpage'] = web['webpage']
+
+                # Following count (Ajax-only) / 关注数（仅 Ajax 有）
+                if web.get('following') is not None:
+                    profile['total_follow_users'] = web['following']
 
         return data
 
     def _html_to_text(self, html: str) -> str:
-        """Convert HTML to plain text, preserving URLs / HTML 转纯文本，保留 URL"""
+        """Convert HTML to plain text, preserving line breaks and URLs."""
         if not html:
             return ''
-        # Replace <br> and block-level closes with newline
-        text = re.sub(r'<br\s*/?>', '\n', html, flags=re.IGNORECASE)
+
+        text = html
+
+        # <br> and block elements → newline / 换行
+        text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
         text = re.sub(r'</(p|div|li|h[1-6])>', '\n', text, flags=re.IGNORECASE)
-        # Preserve <a href="...">text</a> as "text (...)" if text != href
+
+        # <a href="...">text</a> → "text (href)" when different
+        # / 链接：显示文本与 URL 不同时附加到括号
         def link_repl(m):
-            href = m.group(1) or ''
-            inner = m.group(2) or ''
+            href = (m.group(1) or '').strip()
+            inner = (m.group(2) or '')
             inner_text = re.sub(r'<[^>]+>', '', inner).strip()
-            if href and href not in inner_text:
+            if not inner_text:
+                return href
+            if href and href != inner_text:
                 return f"{inner_text} ({href})"
             return inner_text
+
         text = re.sub(
             r'<a\s+[^>]*href=["\']([^"\']*)["\'][^>]*>(.*?)</a>',
-            link_repl, text, flags=re.IGNORECASE | re.DOTALL)
-        # Strip remaining tags
+            link_repl, text, flags=re.IGNORECASE | re.DOTALL,
+        )
+
+        # Strip remaining tags / 剥离剩余标签
         text = re.sub(r'<[^>]+>', '', text)
-        # HTML entities
+
+        # Decode entities / 实体解码
         text = (text.replace('&nbsp;', ' ')
                     .replace('&amp;', '&')
                     .replace('&lt;', '<')
                     .replace('&gt;', '>')
                     .replace('&quot;', '"')
-                    .replace('&#39;', "'"))
-        # Collapse blank lines
+                    .replace('&#39;', "'")
+                    .replace('&apos;', "'"))
+
+        # Collapse >2 consecutive newlines to 2 / 压缩过多空行
         text = re.sub(r'\n{3,}', '\n\n', text)
+
+        # Trim trailing spaces per line / 去掉每行尾随空格
+        text = '\n'.join(line.rstrip() for line in text.split('\n'))
+
         return text.strip()
 
     def get_user_illusts(self, uid, offset=0):
