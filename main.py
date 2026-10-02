@@ -356,6 +356,10 @@ class ConfigManager:
     # ------------------------------------------------------------
     def save(self):
         try:
+            # Ensure web_ajax_mode is never lost / 保证 web_ajax_mode 不丢失
+            api_section = self.config.setdefault('api', {})
+            if 'web_ajax_mode' not in api_section:
+                api_section['web_ajax_mode'] = 'disabled'
             with open(self.CONFIG_FILE, 'w', encoding='utf-8') as f:
                 f.write(self._to_toml(self.config))
         except Exception as e:
@@ -852,11 +856,14 @@ class WebAjaxClient:
                 return {}
             data = r.json()
             if data.get('error'):
-                write_log(f"Web Ajax error: {data.get('message', '')}", 'warn')
+                write_log(
+                    f"Web Ajax error [{path}]: {data.get('message', '')}",
+                    'warn')
                 return {}
+            write_log(f"Web Ajax OK: {path}", 'debug')
             return data.get('body', {}) or {}
         except Exception as e:
-            write_log(f"Web Ajax failed: {e}", 'warn')
+            write_log(f"Web Ajax failed [{path}]: {e}", 'warn')
             return {}
 
     # ------------------------------------------------------------
@@ -1040,11 +1047,60 @@ class PixivAPI:
             web = self.web_ajax.user_detail(uid)
             if web:
                 user = data.setdefault('user', {})
-                if web.get('comment') and not user.get('comment'):
-                    user['comment'] = web['comment']
-                    write_log(f"Enriched user comment from Web Ajax for {uid}", 'info')
+                # Prefer commentHtml (preserves URLs); fallback to comment
+                # / 优先读 commentHtml（保留 URL），回退到 comment
+                web_comment = web.get('commentHtml') or web.get('comment') or ''
+                if web_comment:
+                    # Strip HTML tags but preserve links as plain text
+                    # / 剥离 HTML 标签但保留链接文本
+                    clean = self._html_to_text(web_comment)
+                    if clean and clean != user.get('comment', ''):
+                        user['comment'] = clean
+                        write_log(
+                            f"Enriched user comment from Web Ajax for {uid}",
+                            'info')
+                # Also fill in other fields from Web Ajax
+                # / 补充其他字段
+                for src, dst in [
+                    ('webpage', 'webpage'),
+                    ('twitter', 'twitter_account'),
+                    ('background', None),
+                ]:
+                    if dst and src in web and not user.get(dst):
+                        user[dst] = web.get(src)
 
         return data
+
+    def _html_to_text(self, html: str) -> str:
+        """Convert HTML to plain text, preserving URLs / HTML 转纯文本，保留 URL"""
+        if not html:
+            return ''
+        # Replace <br> and block-level closes with newline
+        text = re.sub(r'<br\s*/?>', '\n', html, flags=re.IGNORECASE)
+        text = re.sub(r'</(p|div|li|h[1-6])>', '\n', text, flags=re.IGNORECASE)
+        # Preserve <a href="...">text</a> as "text (...)" if text != href
+        def link_repl(m):
+            href = m.group(1) or ''
+            inner = m.group(2) or ''
+            inner_text = re.sub(r'<[^>]+>', '', inner).strip()
+            if href and href not in inner_text:
+                return f"{inner_text} ({href})"
+            return inner_text
+        text = re.sub(
+            r'<a\s+[^>]*href=["\']([^"\']*)["\'][^>]*>(.*?)</a>',
+            link_repl, text, flags=re.IGNORECASE | re.DOTALL)
+        # Strip remaining tags
+        text = re.sub(r'<[^>]+>', '', text)
+        # HTML entities
+        text = (text.replace('&nbsp;', ' ')
+                    .replace('&amp;', '&')
+                    .replace('&lt;', '<')
+                    .replace('&gt;', '>')
+                    .replace('&quot;', '"')
+                    .replace('&#39;', "'"))
+        # Collapse blank lines
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        return text.strip()
 
     def get_user_illusts(self, uid, offset=0):
         self.ensure_login()
@@ -3021,15 +3077,30 @@ async def handle_command(bridge, cmd, ws):
         await ws.send_str(json.dumps({'type': 'config', 'data': bridge.config.config}))
 
     elif c == 'save_config':
+        written = []
         for k, v in cmd.get('data', {}).items():
             if k == 'webapi.PHPSESSID':
                 bridge.accounts.set_phpsessid(str(v))
+                written.append(k)
             elif k == 'refresh_token':
-                # Refresh token now managed by accounts / 由 accounts 管理
                 continue
             else:
                 bridge.config.set(k, v)
+                written.append(k)
         bridge.config._resolve_auto_workers()
+        # Force save to disk / 强制写盘
+        bridge.config.save()
+        # Log what was written / 记录写入项
+
+        write_log(
+            f"save_config: received={len(cmd.get('data', {}))}, "
+            f"written={len(written)}, "
+            f"web_ajax_mode={bridge.config.get('api.web_ajax_mode')!r}",
+            'info')
+        if 'api.web_ajax_mode' in written:
+            write_log(
+                f"Config saved: web_ajax_mode={bridge.config.get('api.web_ajax_mode')}",
+                'info')
         await ws.send_str(json.dumps({'type': 'success', 'msg': 'Config saved'}))
         await ws.send_str(json.dumps(bridge._queue_status_payload()))
 
@@ -3136,7 +3207,7 @@ async def ws_handler(request):
         init_payload['type'] = 'init'
         init_payload['config'] = bridge.config.config
         init_payload['ui_state'] = bridge.session.get_ui_state()
-        # Include current items snapshot / 附带当前项状态快照
+        init_payload['phpsessid'] = bridge.accounts.get_phpsessid()   # NEW
         with bridge.worker._items_lock:
             init_payload['items'] = [
                 {'pid': pid, **info}

@@ -91,6 +91,10 @@ function handleMessage(msg) {
     switch (msg.type) {
         case "init":
             fillConfig(msg.config);
+            if (msg.phpsessid !== undefined) {
+                const el = document.getElementById("cfg-webapi.PHPSESSID");
+                if (el) el.value = msg.phpsessid || "";
+            }
             updateQueueStatus(msg);
             if (msg.ui_state) restoreUiState(msg.ui_state);
             if (msg.config.theme) applyTheme(msg.config.theme);
@@ -314,6 +318,12 @@ function handleMessage(msg) {
         case "queue_items":
             queueItems = msg.items || [];
             renderQueueItems();
+            break;
+        case "phpsessid_update":
+            {
+                const el = document.getElementById("cfg-webapi.PHPSESSID");
+                if (el) el.value = msg.phpsessid || "";
+            }
             break;
     }
 }
@@ -1827,7 +1837,7 @@ const CONFIG_KEYS = [
     "api.rate_limit_wait",
     "api.max_results",
     "api.parallel_requests",
-    "api.enable_web_ajax",
+    "api.web_ajax_mode",
     "webapi.PHPSESSID",
 ];
 
@@ -1855,23 +1865,37 @@ function saveConfig(silent = false) {
     CONFIG_KEYS.forEach((k) => {
         const el = document.getElementById("cfg-" + k);
         if (!el) return;
-        if (el.type === "checkbox") data[k] = el.checked;
-        else if (el.type === "number") data[k] = parseFloat(el.value) || 0;
-        else data[k] = el.value;
+        const tag = el.tagName.toLowerCase();
+        const type = (el.type || "").toLowerCase();
+        if (type === "checkbox") {
+            data[k] = el.checked;
+        } else if (type === "number") {
+            data[k] = parseFloat(el.value);
+            if (isNaN(data[k])) data[k] = 0;
+        } else if (tag === "select") {
+            data[k] = el.value;
+        } else {
+            data[k] = el.value;
+        }
     });
+
+    // Debug log for Ajax mode / Ajax 模式调试日志
+    if (data["api.web_ajax_mode"] !== undefined) {
+        console.log(
+            "[config] saving api.web_ajax_mode =",
+            data["api.web_ajax_mode"],
+        );
+    }
+
     send({ cmd: "save_config", data });
 
-    // Apply language immediately / 立即应用语言
     if (data.language === "zh-CN" || data.language === "en") {
         switchLanguage(data.language);
     }
-
-    if (!silent) {
-        toast(t("toast_config_saved") || "Config saved", "success");
-    }
+    if (!silent) toast(t("toast_config_saved"), "success");
     const statusEl = document.getElementById("config-status");
     if (statusEl) {
-        statusEl.textContent = t("toast_config_saved") || "Config saved";
+        statusEl.textContent = t("toast_config_saved");
         setTimeout(() => {
             statusEl.textContent = "";
         }, 2000);
@@ -1886,9 +1910,18 @@ function scheduleConfigSave() {
 function bindConfigAutoSave() {
     CONFIG_KEYS.forEach((k) => {
         const el = document.getElementById("cfg-" + k);
-        if (!el) return;
-        el.addEventListener("input", scheduleConfigSave);
-        el.addEventListener("change", scheduleConfigSave);
+        if (!el) {
+            console.warn("[config] missing element: cfg-" + k);
+            return;
+        }
+        const tag = el.tagName.toLowerCase();
+        const type = (el.type || "").toLowerCase();
+        if (tag === "select" || type === "checkbox") {
+            el.addEventListener("change", scheduleConfigSave);
+        } else {
+            el.addEventListener("input", scheduleConfigSave);
+            el.addEventListener("change", scheduleConfigSave);
+        }
     });
 }
 
