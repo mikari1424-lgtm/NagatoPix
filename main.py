@@ -34,10 +34,7 @@ from bs4 import BeautifulSoup
 from pixivpy3 import AppPixivAPI, PixivError
 from concurrent.futures import ThreadPoolExecutor
 
-try:
-    import tomllib
-except ImportError:
-    import tomli as tomllib
+import tomllib
 
 from i18n import t, meta, set_language, get_language
 
@@ -916,7 +913,12 @@ class PixivAPI:
         self._lock = threading.Lock()
         self._executor = None
         self._executor_lock = threading.Lock()
-
+        
+        if accounts is None:
+            write_log(
+                "PixivAPI created without accounts reference; "
+                "login will fail / 未传入 accounts，登录将失败",
+                'warn')
     # ------------------------------------------------------------
     # Login — reads refresh_token from accounts.json only
     # / 登录：只从 accounts.json 读凭据
@@ -2225,6 +2227,13 @@ def parse_bookmark_html(html):
         write_log(t('bookmark_parse_failed', error=str(e)), 'error')
     return list(set(urls))
 
+def make_api(bridge) -> PixivAPI:
+    """Create a PixivAPI with shared accounts / 创建带 accounts 的 API 实例"""
+    return PixivAPI(
+        bridge.config,
+        bridge.worker.rate_limiter,
+        accounts=bridge.accounts,
+    )
 
 # ============================================================
 # Command handler
@@ -2328,7 +2337,7 @@ async def handle_command(bridge, cmd, ws):
 
         def do_search():
             results = []
-            api = PixivAPI(bridge.config, bridge.worker.rate_limiter)
+            api = make_api(bridge)
             api.ensure_login()
             for i in range(pages):
                 page = start_page + i
@@ -2382,7 +2391,7 @@ async def handle_command(bridge, cmd, ws):
         write_log(f"ranking requested: mode={mode}", 'info')
 
         def do_ranking():
-            api = PixivAPI(bridge.config, bridge.worker.rate_limiter)
+            api = make_api(bridge)
             api.ensure_login()
             delay = float(bridge.config.get('api_request_delay', 0.3))
 
@@ -2524,7 +2533,7 @@ async def handle_command(bridge, cmd, ws):
         loop = asyncio.get_event_loop()
 
         def do_users():
-            api = PixivAPI(bridge.config, bridge.worker.rate_limiter)
+            api = make_api(bridge)
             api.ensure_login()
             return api.search_users(word, offset=offset)
 
@@ -2543,7 +2552,7 @@ async def handle_command(bridge, cmd, ws):
         loop = asyncio.get_event_loop()
 
         def do_user():
-            api = PixivAPI(bridge.config, bridge.worker.rate_limiter)
+            api = make_api(bridge)
             api.ensure_login()
             detail = api.get_user_detail(uid)
             if not detail:
@@ -2604,7 +2613,7 @@ async def handle_command(bridge, cmd, ws):
         loop = asyncio.get_event_loop()
 
         def do_follow():
-            api = PixivAPI(bridge.config, bridge.worker.rate_limiter)
+            api = make_api(bridge)
             api.ensure_login()
             if action == 'follow':
                 return api.follow_user(uid)
@@ -2671,7 +2680,7 @@ async def handle_command(bridge, cmd, ws):
                 kwargs['include_privacy_policy'] = bool(adv['include_privacy_policy'])
 
         def do_rec():
-            api = PixivAPI(bridge.config, bridge.worker.rate_limiter)
+            api = make_api(bridge)
             api.ensure_login()
             results = []
             offset = 0
@@ -2715,7 +2724,7 @@ async def handle_command(bridge, cmd, ws):
         write_log(f"follow_new requested: offset={offset}, restrict={restrict}", 'info')
 
         def do_follow():
-            api = PixivAPI(bridge.config, bridge.worker.rate_limiter)
+            api = make_api(bridge)
             api.ensure_login()
             results = []
             seen_ids = set()
@@ -2815,7 +2824,7 @@ async def handle_command(bridge, cmd, ws):
             return
 
         def do_account():
-            api = PixivAPI(bridge.config, bridge.worker.rate_limiter)
+            api = make_api(bridge)
             api.ensure_login()
             try:
                 uid = api.api.user_id
@@ -2942,7 +2951,7 @@ async def handle_command(bridge, cmd, ws):
         loop = asyncio.get_event_loop()
 
         def do_following():
-            api = PixivAPI(bridge.config, bridge.worker.rate_limiter)
+            api = make_api(bridge)
             api.ensure_login()
             uid = api.api.user_id
             results = []
@@ -2985,7 +2994,7 @@ async def handle_command(bridge, cmd, ws):
         loop = asyncio.get_event_loop()
 
         def do_bookmarks():
-            api = PixivAPI(bridge.config, bridge.worker.rate_limiter)
+            api = make_api(bridge)
             api.ensure_login()
             uid = api.api.user_id
             results = []
@@ -3062,7 +3071,7 @@ async def handle_command(bridge, cmd, ws):
         loop = asyncio.get_event_loop()
 
         def do_toggle():
-            api = PixivAPI(bridge.config, bridge.worker.rate_limiter)
+            api = make_api(bridge)
             api.ensure_login()
             if action == 'add':
                 return api.illust_bookmark_add(iid, restrict=restrict)
