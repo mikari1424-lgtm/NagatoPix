@@ -911,18 +911,7 @@ class PixivAPI:
         self.api = None
         self.logged_in = False
         self._lock = threading.Lock()
-        self._executor = None
-        self._executor_lock = threading.Lock()
-        
-        if accounts is None:
-            write_log(
-                "PixivAPI created without accounts reference; "
-                "login will fail / 未传入 accounts，登录将失败",
-                'warn')
-    # ------------------------------------------------------------
-    # Login — reads refresh_token from accounts.json only
-    # / 登录：只从 accounts.json 读凭据
-    # ------------------------------------------------------------
+
     def login(self):
         if self.api is None:
             self.api = AppPixivAPI()
