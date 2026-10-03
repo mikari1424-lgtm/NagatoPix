@@ -492,7 +492,7 @@ tr.selected .row-checkbox {
 .user-comment {
     font-size: 13px; color: var(--text);
     margin-top: 10px;
-    white-space: pre-wrap;
+    white-space: normal;
     line-height: 1.5;
     max-height: 120px; overflow-y: auto;
 }
@@ -933,7 +933,7 @@ tr.selected .row-checkbox {
     margin-top: 12px;
     font-size: 13px;
     color: var(--text-secondary);
-    white-space: pre-wrap;
+    white-space: normal;
     line-height: 1.5;
 }
 /* ============ Account token display ============ */
@@ -970,6 +970,32 @@ tr.selected .row-checkbox {
     font-size: 11px;
     flex-shrink: 0;
 }
+
+/* ============ Account PHPSESSID editor ============ */
+.account-phpsessid {
+    margin-top: 10px;
+    padding: 8px 10px;
+    background: var(--bg-input);
+    border-radius: 6px;
+    border: 1px solid var(--border-input);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    flex-wrap: wrap;
+}
+.account-phpsessid .account-token-label {
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+}
+.account-phpsessid input {
+    flex: 1 1 240px;
+    min-width: 0;
+    font-family: monospace;
+    font-size: 12px;
+    padding: 4px 8px;
+}
+
 /* ============ Toast ============ */
 .toast {
     position: fixed;
@@ -1378,4 +1404,26 @@ button.primary .btn-icon { filter: brightness(0) invert(1); }
 .iv-action-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+}
+
+/* ============ Comment links / 简介中的链接 ============ */
+.user-comment a.comment-link,
+.account-comment a.comment-link {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px dashed var(--accent);
+    word-break: break-all;
+    transition: color 0.12s, border-bottom-style 0.12s;
+}
+.user-comment a.comment-link:hover,
+.account-comment a.comment-link:hover {
+    border-bottom-style: solid;
+    color: var(--accent-bg-hover);
+}
+
+/* Comment block: preserve line breaks visually */
+.user-comment,
+.account-comment {
+    white-space: normal;
+    line-height: 1.6;
 }

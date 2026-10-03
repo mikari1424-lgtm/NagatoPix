@@ -478,12 +478,6 @@
                     </select>
                 </div>
                 <div class="adv-hint" data-i18n="web_ajax_mode_hint"></div>
-
-                <div class="row" style="margin-top:12px">
-                    <label class="label-wide" data-i18n="settings_phpsessid"></label>
-                    <input type="text" id="cfg-webapi.PHPSESSID" data-i18n-placeholder="phpsessid_ph">
-                </div>
-                <div class="adv-hint" data-i18n="phpsessid_hint"></div>
             </div>
 
             <!-- ============ Download path ============ -->
@@ -635,21 +629,30 @@
             </div>
         </div>
     </div>
-    <div class="modal-overlay" id="add-account-modal">
-        <div class="modal-content" style="max-width:560px">
-            <button class="modal-close" onclick="closeAddAccountModal()">×</button>
-            <h3 style="color:var(--accent); margin-bottom:16px" data-i18n="account_add_title"></h3>
-            <div class="row" style="flex-direction:column; align-items:stretch">
-                <label data-i18n="settings_token" style="margin-bottom:6px"></label>
-                <input type="text" id="new-account-token" data-i18n-placeholder="token_ph" style="width:100%">
-            </div>
-            <div class="adv-hint" data-i18n="account_add_hint"></div>
-            <div class="row" style="margin-top:16px; justify-content:flex-end">
-                <button class="secondary" onclick="closeAddAccountModal()" data-i18n="btn_cancel"></button>
-                <button class="primary" onclick="submitAddAccount()" data-i18n="btn_add_account"></button>
-            </div>
+<div class="modal-overlay" id="add-account-modal">
+    <div class="modal-content" style="max-width:560px">
+        <button class="modal-close" onclick="closeAddAccountModal()">×</button>
+        <h3 style="color:var(--accent); margin-bottom:16px" data-i18n="account_add_title"></h3>
+
+        <div class="row" style="flex-direction:column; align-items:stretch">
+            <label data-i18n="settings_token" style="margin-bottom:6px"></label>
+            <input type="text" id="new-account-token" data-i18n-placeholder="token_ph" style="width:100%">
+        </div>
+
+        <div class="row" style="flex-direction:column; align-items:stretch;
+                    margin-top:12px">
+            <label data-i18n="settings_phpsessid" style="margin-bottom:6px"></label>
+            <input type="text" id="new-account-phpsessid" data-i18n-placeholder="phpsessid_ph"
+                style="width:100%; font-family:monospace; font-size:12px">
+        </div>
+        <div class="adv-hint" data-i18n="phpsessid_hint"></div>
+
+        <div class="row" style="margin-top:16px; justify-content:flex-end">
+            <button class="secondary" onclick="closeAddAccountModal()" data-i18n="btn_cancel"></button>
+            <button class="primary" onclick="submitAddAccount()" data-i18n="btn_add_account"></button>
         </div>
     </div>
+</div>
 
     <!-- Token Help Modal -->
     <div class="modal-overlay" id="token-help-modal">

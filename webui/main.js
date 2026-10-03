@@ -1,5 +1,7 @@
-// NagatoDownloader main / 主逻辑
+// NagatoPix main / 主逻辑
+// Requires i18n.js loaded first / 需先加载 i18n.js
 
+// ============ Global state / 全局状态 ============
 const filterSets = {
     "ranking-tag-cloud": new Set(),
     "udetail-tag-cloud": new Set(),
@@ -11,6 +13,7 @@ let parsedBookmarkUrls = [];
 let rankingItems = [],
     rankingItemsAll = [];
 let searchItems = [],
+    searchItemsRaw = [],
     userSearchItems = [];
 let recommendItems = [],
     followItems = [],
@@ -18,21 +21,26 @@ let recommendItems = [],
 let userDetailItems = [],
     userDetailAllItems = [];
 let userDetailUid = null;
+let currentUserDetail = null;
+let currentAccounts = [];
+let currentAccountProfile = null;
 let followCurrentOffset = 0;
-let followPage = 1;
 let followBatchSize = 300;
 let isConnected = false;
+let queueItems = [];
+let dlItemsExpanded = false;
 let lastQueueState = {
     queue: 0,
     failed: 0,
     processed: 0,
     running: false,
     stopping: false,
+    retryPass: 0,
+    maxRetry: 3,
 };
-let searchItemsRaw = [];
-let accountBookmarksItems = [];
 const lastCheckedIdx = {};
 
+// Illust viewer state / 查看模态框状态
 let ivState = {
     containerId: null,
     items: null,
@@ -40,8 +48,6 @@ let ivState = {
     pages: [],
     pageIdx: 0,
 };
-let currentAccounts = [];
-let currentAccountProfile = null;
 
 const tableItemGetters = {
     "ranking-list": () => rankingItems,
@@ -49,7 +55,8 @@ const tableItemGetters = {
     "recommend-list": () => recommendItems,
     "follow-list": () => followItems,
     "user-detail-list": () => userDetailItems,
-    "account-bookmarks": () => accountBookmarksItems,
+    "account-bookmarks": () =>
+        currentAccountProfile ? currentAccountProfile.bookmarks || [] : [],
 };
 
 // ============ WebSocket ============
@@ -87,14 +94,11 @@ function send(obj) {
     else toast(t("toast_no_connection"), "error");
 }
 
+// ============ Message handling ============
 function handleMessage(msg) {
     switch (msg.type) {
         case "init":
             fillConfig(msg.config);
-            if (msg.phpsessid !== undefined) {
-                const el = document.getElementById("cfg-webapi.PHPSESSID");
-                if (el) el.value = msg.phpsessid || "";
-            }
             updateQueueStatus(msg);
             if (msg.ui_state) restoreUiState(msg.ui_state);
             if (msg.config.theme) applyTheme(msg.config.theme);
@@ -103,87 +107,53 @@ function handleMessage(msg) {
                 renderQueueItems();
             }
             break;
-        case "theme_set":
-            applyTheme(msg.theme);
-            break;
-        case "ui_state_saved":
-            break;
-        case "items_added":
-            break;
-        case "account_result":
-            currentAccountProfile = msg.profile || {};
-            renderAccount(msg.profile);
-            break;
-        case "account_list":
-            currentAccounts = msg.accounts || [];
-            renderAccountList(msg.accounts, msg.current_index);
-            // Re-render account card to refresh token preview / 重渲染卡片
-            if (currentAccountProfile) renderAccount(currentAccountProfile);
-            break;
-        case "account_added":
-            closeAddAccountModal();
-            toast(t("account_added"), "success");
-            loadAccount(true);
-            break;
-        case "account_switched":
-            toast(t("account_switched"), "success");
-            loadAccount(true);
-            break;
-        case "account_removed":
-            toast(t("account_removed"), "success");
-            loadAccount(true);
-            break;
-        case "following_list":
-            renderFollowingList(msg.items);
-            break;
-        case "bookmarks_list":
-            renderBookmarksList(msg.items);
-            break;
+
         case "queue_status":
             updateQueueStatus(msg);
             break;
         case "queue_saved":
             toast(t("toast_queue_saved"), "success");
             break;
+        case "queue_items":
+            queueItems = msg.items || [];
+            renderQueueItems();
+            break;
+
         case "search_result":
             renderSearchResults(msg.items, msg.start_page, msg.pages);
             break;
         case "search_progress":
-            document.getElementById("search-list").innerHTML =
-                `<div class="loading"><div class="spinner"></div>${t("loading_search")}</div>`;
-            document.getElementById("search-status").textContent = t(
-                "status_search_progress",
-                msg.page,
-                msg.current,
-                msg.total,
+            setSearchLoading(
+                t("status_search_progress", msg.page, msg.current, msg.total),
             );
             break;
-        case "ranking_progress":
-            {
-                const el = document.getElementById("ranking-list");
-                if (el)
-                    el.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_ranking")} (${msg.phase}: ${msg.count})</div>`;
-                const s = document.getElementById("ranking-status");
-                if (s)
-                    s.textContent = t(
-                        "status_requesting",
-                        `${msg.phase}: ${msg.count}`,
-                    );
-            }
-            break;
+
         case "ranking_result":
             renderRankingResults(msg.items, msg.stats);
             break;
-        case "follow_progress":
-            {
-                const el = document.getElementById("follow-list");
-                if (el)
-                    el.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_follow")} (${msg.count})</div>`;
-            }
+        case "ranking_progress":
+            setRankingLoading(msg.phase, msg.count);
             break;
+
+        case "recommend_result":
+            renderRecommendResults(msg.items, msg.mode);
+            break;
+        case "follow_progress":
+            setFollowLoading(msg.count);
+            break;
+        case "follow_new_result":
+            renderFollowResults(
+                msg.items,
+                msg.offset,
+                msg.has_more,
+                msg.batch_size,
+            );
+            break;
+
         case "bookmark_parsed":
             renderBookmarkPreview(msg.urls);
             break;
+
         case "config":
             fillConfig(msg.data);
             break;
@@ -201,6 +171,14 @@ function handleMessage(msg) {
             break;
         case "language_set":
             break;
+        case "theme_set":
+            applyTheme(msg.theme);
+            break;
+        case "ui_state_saved":
+            break;
+        case "items_added":
+            break;
+
         case "user_search_result":
             renderUserSearchResults(msg.items);
             break;
@@ -210,6 +188,24 @@ function handleMessage(msg) {
         case "user_detail_result":
             renderUserDetail(msg.user, msg.items);
             break;
+
+        case "follow_user_result":
+            if (
+                msg.success &&
+                currentUserDetail &&
+                currentUserDetail.id === msg.uid
+            ) {
+                currentUserDetail.is_followed = msg.action === "follow";
+                renderUserHeaderOnly(currentUserDetail);
+                toast(
+                    msg.action === "follow"
+                        ? t("toast_followed")
+                        : t("toast_unfollowed"),
+                    "success",
+                );
+            }
+            break;
+
         case "rate_limited":
             showRateLimitToast(msg.delay);
             break;
@@ -229,101 +225,39 @@ function handleMessage(msg) {
         case "startup_latency":
             if (msg.latency > 300) toast(t("toast_network_bad"), "warn");
             break;
-        case "follow_user_result":
-            if (
-                msg.success &&
-                currentUserDetail &&
-                currentUserDetail.id === msg.uid
-            ) {
-                currentUserDetail.is_followed = msg.action === "follow";
-                renderUserHeaderOnly(currentUserDetail);
-                toast(
-                    msg.action === "follow"
-                        ? t("toast_followed")
-                        : t("toast_unfollowed"),
-                    "success",
-                );
-            }
-            break;
 
-        case "follow_new_result":
-            try {
-                renderFollowResults(
-                    msg.items,
-                    msg.offset,
-                    msg.has_more,
-                    msg.batch_size,
-                );
-            } catch (e) {
-                console.error("renderFollowResults failed:", e);
-                const btn = document.getElementById("btn-load-follow");
-                if (btn) btn.disabled = false;
-                toast("Render failed: " + e.message, "error");
-            }
+        // Account
+        case "account_result":
+            currentAccountProfile = msg.profile || {};
+            renderAccount(msg.profile);
             break;
-        case "follow_user_result":
-            if (
-                msg.success &&
-                currentUserDetail &&
-                currentUserDetail.id === msg.uid
-            ) {
-                currentUserDetail.is_followed = msg.action === "follow";
-                renderUserHeaderOnly(currentUserDetail);
-                toast(
-                    msg.action === "follow"
-                        ? t("toast_followed")
-                        : t("toast_unfollowed"),
-                    "success",
-                );
-            }
+        case "account_list":
+            currentAccounts = msg.accounts || [];
+            renderAccountList(msg.accounts, msg.current_index);
+            if (currentAccountProfile) renderAccount(currentAccountProfile);
             break;
-
-        case "follow_new_result":
-            try {
-                renderFollowResults(
-                    msg.items,
-                    msg.offset,
-                    msg.has_more,
-                    msg.batch_size,
-                );
-            } catch (e) {
-                console.error("renderFollowResults failed:", e);
-                const btn = document.getElementById("btn-load-follow");
-                if (btn) btn.disabled = false;
-                toast("Render failed: " + e.message, "error");
-            }
+        case "account_added":
+            closeAddAccountModal();
+            toast(t("account_added"), "success");
+            loadAccount(true);
             break;
-        case "bookmark_result":
-            {
-                const it = ivState.items?.[ivState.idx];
-                if (it && it.id === msg.id) {
-                    if (msg.success) {
-                        it.is_bookmarked = msg.action === "add";
-                        renderIvActions(it);
-                        toast(
-                            msg.action === "add"
-                                ? t("toast_bookmark_added")
-                                : t("toast_bookmark_removed"),
-                            "success",
-                        );
-                    } else {
-                        toast(
-                            t("toast_bookmark_failed", msg.msg || ""),
-                            "error",
-                        );
-                    }
-                }
-            }
+        case "account_switched":
+            toast(t("account_switched"), "success");
+            loadAccount(true);
             break;
-        case "queue_items":
-            queueItems = msg.items || [];
-            renderQueueItems();
+        case "account_removed":
+            toast(t("account_removed"), "success");
+            loadAccount(true);
             break;
-        case "phpsessid_update":
-            {
-                const el = document.getElementById("cfg-webapi.PHPSESSID");
-                if (el) el.value = msg.phpsessid || "";
-            }
+        case "phpsessid_updated":
+            toast(t("toast_phpsessid_saved"), "success");
+            send({ cmd: "list_accounts" });
+            break;
+        case "following_list":
+            renderFollowingList(msg.items);
+            break;
+        case "bookmarks_list":
+            renderBookmarksList(msg.items);
             break;
     }
 }
@@ -358,8 +292,8 @@ function showRateLimitToast(delaySeconds) {
     const endTime = Date.now() + delaySeconds * 1000;
     const el = document.getElementById("toast");
     const tick = () => {
-        const remaining = Math.max(0, Math.ceil((endTime - Date.now()) / 1000));
-        if (remaining <= 0) {
+        const rem = Math.max(0, Math.ceil((endTime - Date.now()) / 1000));
+        if (rem <= 0) {
             el.className = "toast";
             if (rateLimitTimer) {
                 clearInterval(rateLimitTimer);
@@ -373,14 +307,14 @@ function showRateLimitToast(delaySeconds) {
                 : "⚠️ Rate limit triggered";
         const suffix =
             currentLang === "zh-CN" ? "秒后自动重试" : "s until retry";
-        el.textContent = `${prefix}，${remaining} ${suffix}...`;
+        el.textContent = `${prefix}，${rem} ${suffix}...`;
         el.className = "toast show warn";
     };
     tick();
     rateLimitTimer = setInterval(tick, 500);
 }
 
-// ============ i18n render ============
+// ============ i18n / theme ============
 function applyI18n() {
     document.querySelectorAll("[data-i18n]").forEach((el) => {
         el.textContent = t(el.dataset.i18n);
@@ -409,77 +343,91 @@ function switchLanguage(lang) {
     renderTokenHelp();
 }
 
+function applyTheme(theme) {
+    document.documentElement.setAttribute("data-theme", theme);
+    document.getElementById("theme-icon").textContent =
+        theme === "dark" ? "🌙" : "☀️";
+    localStorage.setItem("nagato_theme", theme);
+}
+
+function toggleTheme() {
+    const cur = document.documentElement.getAttribute("data-theme") || "dark";
+    const next = cur === "dark" ? "light" : "dark";
+    applyTheme(next);
+    send({ cmd: "set_theme", theme: next });
+}
+
 function renderTokenHelp() {
     const el = document.getElementById("token-help-body");
     if (!el) return;
     if (currentLang === "zh-CN") {
         el.innerHTML = `
-            <p style="margin-bottom:12px">由于 Pixiv 已不再支持用户名密码登录，您需要先获取一个 RefreshToken。以下方式任选其一：</p>
-            <div style="background:#1e2228; border-radius:6px; padding:12px; margin-bottom:12px">
-                <div style="color:#7eb6ff; font-weight:600; margin-bottom:8px">方式一：Pixiv-Viewer 网页端（推荐）</div>
-                <ol style="margin-left:18px; color:#a0a4ab">
-                    <li>安装 <a href="https://einaregilsson.com/redirector/" target="_blank" style="color:#7eb6ff">Redirector</a> 和 <a href="https://www.tampermonkey.net/index.php" target="_blank" style="color:#7eb6ff">Tampermonkey</a> 扩展</li>
-                    <li>导入 Redirector 规则：<code style="background:#2f343c; padding:2px 6px; border-radius:3px; font-size:12px">https://pixiv.pictures/helper/Redirector.json</code></li>
-                    <li>安装 <a href="https://fastly.jsdelivr.net/gh/asadahimeka/pixiv-viewer@master/public/helper/helper.user.js" target="_blank" style="color:#7eb6ff">登录工具用户脚本</a></li>
-                    <li>访问 <a href="https://pixiv.pictures/account/login" target="_blank" style="color:#7eb6ff">pixiv.pictures/account/login</a>，选择 <b>App API (OAuth)</b> 登录</li>
-                    <li>登录成功后，在 <a href="https://pixiv.pictures/setting/others" target="_blank" style="color:#7eb6ff">设置页面</a> 导出 RefreshToken</li>
+            <p>由于 Pixiv 已不再支持用户名密码登录，您需要先获取一个 RefreshToken。以下方式任选其一：</p>
+            <div class="help-block">
+                <div class="help-block-title">方式一：Pixiv-Viewer 网页端（推荐）</div>
+                <ol>
+                    <li>安装 <a href="https://einaregilsson.com/redirector/" target="_blank">Redirector</a> 和 <a href="https://www.tampermonkey.net/index.php" target="_blank">Tampermonkey</a> 扩展</li>
+                    <li>导入 Redirector 规则：<code>https://pixiv.pictures/helper/Redirector.json</code></li>
+                    <li>安装 <a href="https://fastly.jsdelivr.net/gh/asadahimeka/pixiv-viewer@master/public/helper/helper.user.js" target="_blank">登录工具用户脚本</a></li>
+                    <li>访问 <a href="https://pixiv.pictures/account/login" target="_blank">pixiv.pictures/account/login</a>，选择 <b>App API (OAuth)</b> 登录</li>
+                    <li>登录成功后，在 <a href="https://pixiv.pictures/setting/others" target="_blank">设置页面</a> 导出 RefreshToken</li>
                 </ol>
             </div>
-            <div style="background:#1e2228; border-radius:6px; padding:12px; margin-bottom:12px">
-                <div style="color:#7eb6ff; font-weight:600; margin-bottom:8px">方式二：pxder（Node.js）</div>
-                <ol style="margin-left:18px; color:#a0a4ab">
-                    <li>安装 Node.js 16+，执行 <code style="background:#2f343c; padding:2px 6px; border-radius:3px; font-size:12px">npm i -g pxder</code></li>
-                    <li>如需代理：<code style="background:#2f343c; padding:2px 6px; border-radius:3px; font-size:12px">pxder --setting</code> → 选择 5 设置代理</li>
-                    <li>执行 <code style="background:#2f343c; padding:2px 6px; border-radius:3px; font-size:12px">pxder --login</code> 完成登录</li>
-                    <li>执行 <code style="background:#2f343c; padding:2px 6px; border-radius:3px; font-size:12px">pxder --export-token</code> 导出 Token</li>
+            <div class="help-block">
+                <div class="help-block-title">方式二：pxder（Node.js）</div>
+                <ol>
+                    <li>安装 Node.js 16+，执行 <code>npm i -g pxder</code></li>
+                    <li>如需代理：<code>pxder --setting</code> → 选择 5 设置代理</li>
+                    <li>执行 <code>pxder --login</code> 完成登录</li>
+                    <li>执行 <code>pxder --export-token</code> 导出 Token</li>
                 </ol>
             </div>
-            <div style="background:#1e2228; border-radius:6px; padding:12px; margin-bottom:12px">
-                <div style="color:#7eb6ff; font-weight:600; margin-bottom:8px">方式三：PixEz（Android/iOS）</div>
-                <ol style="margin-left:18px; color:#a0a4ab">
-                    <li>从 <a href="https://github.com/Notsfsssf/pixez-flutter" target="_blank" style="color:#7eb6ff">GitHub</a> 下载安装</li>
+            <div class="help-block">
+                <div class="help-block-title">方式三：PixEz（Android/iOS）</div>
+                <ol>
+                    <li>从 <a href="https://github.com/Notsfsssf/pixez-flutter" target="_blank">GitHub</a> 下载安装</li>
                     <li>登录后进入 <b>更多 → 账户信息 → Token export</b> 导出</li>
                 </ol>
             </div>
-            <p style="color:#f59e0b; font-size:12px; margin-top:12px">⚠️ RefreshToken 时效较长，登录一次保存好即可长期使用。如果无法直连 Pixiv，请先在设置中配置代理。</p>
-            <p style="color:#808590; font-size:12px; margin-top:8px">原始教程：<a href="https://www.nanoka.top/posts/e78ef86/" target="_blank" style="color:#7eb6ff">https://www.nanoka.top/posts/e78ef86/</a></p>
+            <p class="help-warn">⚠️ RefreshToken 时效较长，登录一次保存好即可长期使用。如果无法直连 Pixiv，请先在设置中配置代理。</p>
+            <p class="help-note">原始教程：<a href="https://www.nanoka.top/posts/e78ef86/" target="_blank">https://www.nanoka.top/posts/e78ef86/</a></p>
         `;
     } else {
         el.innerHTML = `
-            <p style="margin-bottom:12px">Pixiv no longer supports username/password login. You need a RefreshToken. Choose one of the following methods:</p>
-            <div style="background:#1e2228; border-radius:6px; padding:12px; margin-bottom:12px">
-                <div style="color:#7eb6ff; font-weight:600; margin-bottom:8px">Method 1: Pixiv-Viewer (recommended)</div>
-                <ol style="margin-left:18px; color:#a0a4ab">
-                    <li>Install <a href="https://einaregilsson.com/redirector/" target="_blank" style="color:#7eb6ff">Redirector</a> and <a href="https://www.tampermonkey.net/index.php" target="_blank" style="color:#7eb6ff">Tampermonkey</a></li>
-                    <li>Import redirect rule: <code style="background:#2f343c; padding:2px 6px; border-radius:3px; font-size:12px">https://pixiv.pictures/helper/Redirector.json</code></li>
-                    <li>Install the <a href="https://fastly.jsdelivr.net/gh/asadahimeka/pixiv-viewer@master/public/helper/helper.user.js" target="_blank" style="color:#7eb6ff">login helper userscript</a></li>
-                    <li>Visit <a href="https://pixiv.pictures/account/login" target="_blank" style="color:#7eb6ff">pixiv.pictures/account/login</a>, choose App API (OAuth)</li>
-                    <li>Export the token from <a href="https://pixiv.pictures/setting/others" target="_blank" style="color:#7eb6ff">Settings</a></li>
+            <p>Pixiv no longer supports username/password login. You need a RefreshToken. Choose one:</p>
+            <div class="help-block">
+                <div class="help-block-title">Method 1: Pixiv-Viewer (recommended)</div>
+                <ol>
+                    <li>Install <a href="https://einaregilsson.com/redirector/" target="_blank">Redirector</a> and <a href="https://www.tampermonkey.net/index.php" target="_blank">Tampermonkey</a></li>
+                    <li>Import redirect rule: <code>https://pixiv.pictures/helper/Redirector.json</code></li>
+                    <li>Install the <a href="https://fastly.jsdelivr.net/gh/asadahimeka/pixiv-viewer@master/public/helper/helper.user.js" target="_blank">login helper userscript</a></li>
+                    <li>Visit <a href="https://pixiv.pictures/account/login" target="_blank">pixiv.pictures/account/login</a>, choose App API (OAuth)</li>
+                    <li>Export the token from <a href="https://pixiv.pictures/setting/others" target="_blank">Settings</a></li>
                 </ol>
             </div>
-            <div style="background:#1e2228; border-radius:6px; padding:12px; margin-bottom:12px">
-                <div style="color:#7eb6ff; font-weight:600; margin-bottom:8px">Method 2: pxder (Node.js)</div>
-                <ol style="margin-left:18px; color:#a0a4ab">
-                    <li>Install Node.js 16+, run <code style="background:#2f343c; padding:2px 6px; border-radius:3px; font-size:12px">npm i -g pxder</code></li>
-                    <li>Proxy (if needed): <code style="background:#2f343c; padding:2px 6px; border-radius:3px; font-size:12px">pxder --setting</code> → option 5</li>
-                    <li>Run <code style="background:#2f343c; padding:2px 6px; border-radius:3px; font-size:12px">pxder --login</code></li>
-                    <li>Run <code style="background:#2f343c; padding:2px 6px; border-radius:3px; font-size:12px">pxder --export-token</code></li>
+            <div class="help-block">
+                <div class="help-block-title">Method 2: pxder (Node.js)</div>
+                <ol>
+                    <li>Install Node.js 16+, run <code>npm i -g pxder</code></li>
+                    <li>Proxy (if needed): <code>pxder --setting</code> → option 5</li>
+                    <li>Run <code>pxder --login</code></li>
+                    <li>Run <code>pxder --export-token</code></li>
                 </ol>
             </div>
-            <div style="background:#1e2228; border-radius:6px; padding:12px; margin-bottom:12px">
-                <div style="color:#7eb6ff; font-weight:600; margin-bottom:8px">Method 3: PixEz (mobile)</div>
-                <ol style="margin-left:18px; color:#a0a4ab">
-                    <li>Download from <a href="https://github.com/Notsfsssf/pixez-flutter" target="_blank" style="color:#7eb6ff">GitHub</a></li>
+            <div class="help-block">
+                <div class="help-block-title">Method 3: PixEz (mobile)</div>
+                <ol>
+                    <li>Download from <a href="https://github.com/Notsfsssf/pixez-flutter" target="_blank">GitHub</a></li>
                     <li>More → Account → Token export</li>
                 </ol>
             </div>
-            <p style="color:#f59e0b; font-size:12px; margin-top:12px">⚠️ RefreshToken is long-lived. Save it once after login. If you cannot reach Pixiv directly, configure a proxy first.</p>
-            <p style="color:#808590; font-size:12px; margin-top:8px">Original guide: <a href="https://www.nanoka.top/posts/e78ef86/" target="_blank" style="color:#7eb6ff">https://www.nanoka.top/posts/e78ef86/</a></p>
+            <p class="help-warn">⚠️ RefreshToken is long-lived. Configure a proxy first if you cannot reach Pixiv directly.</p>
+            <p class="help-note">Original guide: <a href="https://www.nanoka.top/posts/e78ef86/" target="_blank">https://www.nanoka.top/posts/e78ef86/</a></p>
         `;
     }
 }
 
-// ============ Queue status ============
+// ============ Queue status / 队列状态 ============
 function updateQueueStatus(payload) {
     const q = payload.queue || 0;
     const f = payload.failed || 0;
@@ -501,166 +449,129 @@ function updateQueueStatus(payload) {
         maxRetry,
     };
 
-    // Float ball / 悬浮球
-    const ball = document.getElementById("float-ball");
-    const ballCount = document.getElementById("ball-count");
-    const selCount = getSelectionCount();
-    if (ball) {
-        if (selCount > 0) {
-            ball.classList.add("show");
-            if (ballCount) ballCount.textContent = selCount;
-        } else {
-            ball.classList.remove("show");
-        }
-    }
+    updateSelectionCount();
 
-    // Progress summary / 进度摘要
     const total = q + p;
     const pct = total > 0 ? (p / total) * 100 : 0;
 
-    const fill = document.getElementById("progress-fill");
-    if (fill) fill.style.width = pct.toFixed(1) + "%";
+    setEl("progress-fill", (el) => (el.style.width = pct.toFixed(1) + "%"));
+    setEl("dl-pct", (el) => (el.textContent = pct.toFixed(1) + "%"));
+    setEl("dl-remaining", (el) => (el.textContent = t("dl_remaining_fmt", q)));
 
-    const pctEl = document.getElementById("dl-pct");
-    if (pctEl) pctEl.textContent = pct.toFixed(1) + "%";
+    setEl("dl-failed-line", (el) => {
+        el.textContent = t("dl_failed_fmt", f);
+        el.style.color = f > 0 ? "var(--error)" : "";
+    });
 
-    const remEl = document.getElementById("dl-remaining");
-    if (remEl) remEl.textContent = t("dl_remaining_fmt", q);
+    updateDownloadStatusText();
 
-    const failEl = document.getElementById("dl-failed-line");
-    if (failEl) {
-        failEl.textContent = t("dl_failed_fmt", f);
-        failEl.style.color = f > 0 ? "var(--error)" : "";
+    setEl("dl-preset", (el) => (el.value = mode));
+    setEl("dl-threads", (el) => {
+        el.value = workers;
+        el.disabled = mode === "normal";
+    });
+
+    const stopBtn = document.getElementById("btn-stop");
+    if (stopBtn) {
+        stopBtn.disabled = !running;
+        stopBtn.textContent = stopping ? t("btn_stopping") : t("btn_stop");
     }
-
-    const statusEl = document.getElementById("dl-status");
-    if (statusEl) {
-        if (stopping) {
-            statusEl.textContent = t("dl_status_stopping");
-        } else if (running) {
-            if (retryPass > 0) {
-                statusEl.textContent = t(
-                    "dl_status_retry",
-                    retryPass,
-                    maxRetry,
-                );
-            } else {
-                statusEl.textContent = t("dl_status_running");
-            }
-        } else {
-            statusEl.textContent = t("dl_status_idle");
-        }
-    }
-
-    // Controls / 控件
-    const presetSel = document.getElementById("dl-preset");
-    if (presetSel) presetSel.value = mode;
-
-    const threadsInput = document.getElementById("dl-threads");
-    if (threadsInput) {
-        threadsInput.value = workers;
-        threadsInput.disabled = mode === "normal";
-    }
-
-    const btnStop = document.getElementById("btn-stop");
-    if (btnStop) {
-        btnStop.disabled = !running;
-        btnStop.textContent = stopping ? t("btn_stopping") : t("btn_stop");
-    }
-
-    // Legacy buttons (may not exist) / 兼容旧按钮
-    const btnStart = document.getElementById("btn-start");
-    if (btnStart) btnStart.disabled = running || stopping;
-
-    const queueCountEl = document.getElementById("queue-count");
-    if (queueCountEl) queueCountEl.textContent = q;
-
-    const failedCountEl = document.getElementById("failed-count");
-    if (failedCountEl) failedCountEl.textContent = f;
-
-    // Bookmark add button state / 书签添加按钮
-    const bkBtn = document.getElementById("bookmark-add-btn");
-    if (bkBtn) bkBtn.disabled = parsedBookmarkUrls.length === 0;
-
-    updateSelectionCount();
 }
 
 function updateDownloadStatusText() {
     const el = document.getElementById("dl-status");
     if (!el) return;
-    if (lastQueueState.stopping) el.textContent = t("btn_stopping");
-    else if (lastQueueState.running) el.textContent = t("dl_running");
-    else if (lastQueueState.queue > 0) el.textContent = t("dl_idle");
-    else el.textContent = t("dl_idle");
+    if (lastQueueState.stopping) el.textContent = t("dl_status_stopping");
+    else if (lastQueueState.running) {
+        el.textContent =
+            lastQueueState.retryPass > 0
+                ? t(
+                      "dl_status_retry",
+                      lastQueueState.retryPass,
+                      lastQueueState.maxRetry,
+                  )
+                : t("dl_status_running");
+    } else el.textContent = t("dl_status_idle");
 }
 
-// ============ Nav ============
-document.querySelectorAll("nav button").forEach((btn) => {
-    btn.onclick = () => {
-        document
-            .querySelectorAll("nav button")
-            .forEach((b) => b.classList.remove("active"));
-        document
-            .querySelectorAll(".tab")
-            .forEach((t) => t.classList.remove("active"));
-        btn.classList.add("active");
-        document
-            .getElementById("tab-" + btn.dataset.tab)
-            .classList.add("active");
-        updateSelectionCount();
-    };
-});
-
-// ============ Manual / Bookmark ============
-function addSingleUrl() {
-    const url = document.getElementById("manual-url").value.trim();
-    if (!url) return toast(t("toast_need_url"), "error");
-    send({ cmd: "add_urls", urls: [url] });
-    document.getElementById("manual-url").value = "";
-    closeAddTaskModal();
+function setEl(id, fn) {
+    const el = document.getElementById(id);
+    if (el) fn(el);
 }
 
-function addBatchUrls() {
-    const text = document.getElementById("manual-batch").value.trim();
-    if (!text) return toast(t("toast_need_urls"), "error");
-    const urls = text
-        .split("\n")
-        .map((s) => s.trim())
-        .filter((s) => s);
-    send({ cmd: "add_urls", urls });
-    document.getElementById("manual-batch").value = "";
-    closeAddTaskModal();
+// ============ Selection / 选择 ============
+function getActiveTab() {
+    const active = document.querySelector("nav button.active");
+    return active ? active.dataset.tab : null;
 }
 
-function parseBookmark() {
-    const fi = document.getElementById("bookmark-file");
-    if (!fi.files.length) return toast(t("toast_select_file"), "error");
-    const reader = new FileReader();
-    reader.onload = (e) =>
-        send({ cmd: "parse_bookmark", html: e.target.result });
-    reader.readAsText(fi.files[0], "utf-8");
+function getSelectionInfo() {
+    const tab = getActiveTab();
+    if (tab === "ranking")
+        return { containerId: "ranking-list", items: rankingItems };
+    if (tab === "search")
+        return { containerId: "search-list", items: searchItems };
+    if (tab === "recommend")
+        return { containerId: "recommend-list", items: recommendItems };
+    if (tab === "follow")
+        return { containerId: "follow-list", items: followItems };
+    if (tab === "user-detail")
+        return { containerId: "user-detail-list", items: userDetailItems };
+    return null;
 }
 
-function renderBookmarkPreview(urls) {
-    parsedBookmarkUrls = urls;
-    document.getElementById("bookmark-preview").innerHTML = urls
-        .map(
-            (u) =>
-                `<div style="padding:4px 0; border-bottom:1px solid #2f343c">${escapeHtml(u)}</div>`,
-        )
-        .join("");
-    const btn = document.getElementById("bookmark-add-btn");
-    btn.disabled = urls.length === 0;
-    toast(t("toast_parsed", urls.length), "success");
+function getSelectionCount() {
+    const info = getSelectionInfo();
+    if (!info) return 0;
+    const container = document.getElementById(info.containerId);
+    return container ? container.querySelectorAll("tr.selected").length : 0;
 }
 
-function addBookmarkUrls() {
-    if (!parsedBookmarkUrls.length) return;
-    send({ cmd: "add_urls", urls: parsedBookmarkUrls });
-    closeAddTaskModal();
+function updateSelectionCount() {
+    const count = getSelectionCount();
+    const ball = document.getElementById("float-ball");
+    const ballCount = document.getElementById("ball-count");
+    if (ball) {
+        if (count > 0) {
+            ball.classList.add("show");
+            if (ballCount) ballCount.textContent = count;
+        } else {
+            ball.classList.remove("show");
+        }
+    }
 }
 
-// ============ Sorting ============
+function onFloatBallClick() {
+    const info = getSelectionInfo();
+    if (!info) return;
+    enqueueSelected(info.containerId, info.items);
+}
+
+function enqueueSelected(containerId, items) {
+    const selected = [];
+    document.querySelectorAll(`#${containerId} tr.selected`).forEach((tr) => {
+        const it = items[parseInt(tr.dataset.idx)];
+        if (it) selected.push(it);
+    });
+    if (!selected.length) return toast(t("toast_no_select"), "error");
+
+    const payload = selected.map((it) => {
+        const entry = { url: `https://www.pixiv.net/artworks/${it.id}` };
+        if (it._slim_illust) entry.metadata = { illust: it._slim_illust };
+        return entry;
+    });
+    send({ cmd: "add_items", items: payload });
+
+    document.querySelectorAll(`#${containerId} tr.selected`).forEach((tr) => {
+        tr.classList.remove("selected");
+        updateCheckboxIcon(tr);
+    });
+    lastCheckedIdx[containerId] = null;
+    updateSelectionCount();
+    toast(t("toast_selected_queued", selected.length), "success");
+}
+
+// ============ Table sorting / 表格排序 ============
 const WORK_COLUMNS = [
     { key: "id", get: "th_pid", numeric: true },
     { key: "title", get: "th_title", numeric: false },
@@ -710,6 +621,8 @@ function getSortValue(item, key) {
             return item.views || 0;
         case "bookmarks":
             return item.bookmarks || 0;
+        case "likes":
+            return item.likes || 0;
         case "tags":
             return (item.tags || []).join(",").toLowerCase();
         case "date":
@@ -731,13 +644,9 @@ function sortTable(containerId, colKey) {
 
 function applySort(containerId) {
     const state = sortState[containerId];
-    let items;
-    if (containerId === "ranking-list") items = rankingItems;
-    else if (containerId === "search-list") items = searchItems;
-    else if (containerId === "recommend-list") items = recommendItems;
-    else if (containerId === "follow-list") items = followItems;
-    else if (containerId === "user-detail-list") items = userDetailItems;
-    else return;
+    const items = tableItemGetters[containerId]
+        ? tableItemGetters[containerId]()
+        : null;
     if (!items || !items.length) return;
 
     if (state.col) {
@@ -751,19 +660,18 @@ function applySort(containerId) {
             if (numeric) {
                 const diff = (va || 0) - (vb || 0);
                 return state.asc ? diff : -diff;
-            } else {
-                va = String(va);
-                vb = String(vb);
-                if (va < vb) return state.asc ? -1 : 1;
-                if (va > vb) return state.asc ? 1 : -1;
-                return 0;
             }
+            va = String(va);
+            vb = String(vb);
+            if (va < vb) return state.asc ? -1 : 1;
+            if (va > vb) return state.asc ? 1 : -1;
+            return 0;
         });
     }
     renderTable(containerId, items);
 }
 
-// ============ Render table ============
+// ============ Table render ============
 function renderTable(containerId, items) {
     const container = document.getElementById(containerId);
     if (!container) return;
@@ -774,7 +682,7 @@ function renderTable(containerId, items) {
         return;
     }
 
-    // Preserve selected PIDs across re-render / 重渲染时保留选中
+    // Preserve selected PIDs
     const selectedPids = new Set();
     container.querySelectorAll("tr.selected").forEach((tr) => {
         const idTd = tr.querySelector('td[data-col="id"]');
@@ -784,7 +692,6 @@ function renderTable(containerId, items) {
     const state = sortState[containerId];
     const cols = TABLE_COLUMNS[containerId];
 
-    // ---- Table head ----
     const thead =
         '<th class="col-checkbox"></th>' +
         cols
@@ -801,12 +708,10 @@ function renderTable(containerId, items) {
             })
             .join("");
 
-    // ---- Table rows ----
     const rows = items
         .map((it, idx) => {
             const isSelected = selectedPids.has(String(it.id));
 
-            // Badges inline after title / 标题后的徽章
             let badges = "";
             if (it.is_new) badges += '<span class="badge new">NEW</span>';
             if (it.ai_generated) badges += '<span class="badge ai">AI</span>';
@@ -815,26 +720,22 @@ function renderTable(containerId, items) {
                 badges += `<span class="badge ${cls}">${it.restriction}</span>`;
             }
 
-            // Tags: clickable / 可点击标签
             const tagsHtml = (it.tags || [])
                 .slice(0, 6)
                 .map(
                     (tag) =>
-                        `<span class="tag tag-clickable"
-                   data-action="tag-search"
+                        `<span class="tag tag-clickable" data-action="tag-search"
                    data-tag="${escapeHtml(tag)}"
                    title="${t("tag_search_title")}">${escapeHtml(tag)}</span>`,
                 )
                 .join("");
 
-            // Title: opens viewer / 标题：打开查看模态框
             const titleHtml = `<a href="#" class="illust-title-link"
-                data-action="open-illust"
-                data-container="${containerId}"
-                data-idx="${idx}"
-                title="${t("iv_open_pixiv")}">${escapeHtml(truncate(it.title || "", 40))}</a>${badges}`;
+            data-action="open-illust"
+            data-container="${containerId}"
+            data-idx="${idx}"
+            title="${t("iv_open_pixiv")}">${escapeHtml(truncate(it.title || "", 40))}</a>${badges}`;
 
-            // Checkbox / 复选框
             let tds = `<td class="col-checkbox">
             <img class="row-checkbox"
                  src="/ui_icons/${isSelected ? "selected" : "unselected"}.svg"
@@ -857,9 +758,8 @@ function renderTable(containerId, items) {
                         break;
                     case "author":
                         if (it.author_id) {
-                            tds += `<td data-col="author"><a href="#"
-                            data-action="open-user"
-                            data-uid="${it.author_id}"
+                            tds += `<td data-col="author"><a href="#" class="user-link"
+                            data-action="open-user" data-uid="${it.author_id}"
                             title="${t("th_author_link")}">${escapeHtml(it.author)}</a></td>`;
                         } else {
                             tds += `<td data-col="author">${escapeHtml(it.author)}</td>`;
@@ -870,6 +770,9 @@ function renderTable(containerId, items) {
                         break;
                     case "bookmarks":
                         tds += `<td data-col="bookmarks" style="text-align:right">${formatNum(it.bookmarks)}</td>`;
+                        break;
+                    case "likes":
+                        tds += `<td data-col="likes" style="text-align:right">${formatNum(it.likes)}</td>`;
                         break;
                     case "tags":
                         tds += `<td data-col="tags">${tagsHtml}</td>`;
@@ -887,61 +790,15 @@ function renderTable(containerId, items) {
     container.innerHTML = `<table><thead><tr>${thead}</tr></thead><tbody>${rows}</tbody></table>`;
     updateSelectionCount();
 }
-// ============ Table event delegation ============
-document.addEventListener(
-    "click",
-    (e) => {
-        const target = e.target.closest("[data-action]");
-        if (!target) return;
 
-        const action = target.dataset.action;
-
-        // 1) Checkbox — toggle selection / 复选框：切换选中
-        if (action === "toggle-checkbox") {
-            e.preventDefault();
-            e.stopPropagation();
-            const containerId = target.dataset.container;
-            const idx = parseInt(target.dataset.idx, 10);
-            onCheckboxClick(e, containerId, idx);
-            return;
-        }
-
-        // 2) Title — open illust viewer modal / 标题：打开查看模态框
-        if (action === "open-illust") {
-            e.preventDefault();
-            e.stopPropagation();
-            const containerId = target.dataset.container;
-            const idx = parseInt(target.dataset.idx, 10);
-            openIllustViewer(containerId, idx);
-            return;
-        }
-
-        // 3) Author — open user detail / 作者：打开用户详情
-        if (action === "open-user") {
-            e.preventDefault();
-            e.stopPropagation();
-            const uid = parseInt(target.dataset.uid, 10);
-            if (uid) openUserDetail(uid);
-            return;
-        }
-
-        // 4) Tag — search this tag / 标签：搜索
-        if (action === "tag-search") {
-            e.preventDefault();
-            e.stopPropagation();
-            onTagClick(e, target);
-            return;
-        }
-    },
-    true,
-);
-
-function toggleRow(tr) {
-    tr.classList.toggle("selected");
-    updateCheckboxIcon(tr);
-    updateSelectionCount();
-    scheduleUiStateSave();
+function updateCheckboxIcon(row) {
+    const cb = row.querySelector(".row-checkbox");
+    if (!cb) return;
+    cb.src = row.classList.contains("selected")
+        ? "/ui_icons/selected.svg"
+        : "/ui_icons/unselected.svg";
 }
+
 function onCheckboxClick(evt, containerId, idx) {
     evt.preventDefault();
     evt.stopPropagation();
@@ -974,175 +831,114 @@ function onCheckboxClick(evt, containerId, idx) {
     scheduleUiStateSave();
 }
 
-function updateCheckboxIcon(row) {
-    const cb = row.querySelector(".row-checkbox");
-    if (!cb) return;
-    const isSelected = row.classList.contains("selected");
-    cb.src = isSelected ? "/ui_icons/selected.svg" : "/ui_icons/unselected.svg";
-}
+// ============ Table event delegation ============
+document.addEventListener(
+    "click",
+    (e) => {
+        const target = e.target.closest("[data-action]");
+        if (!target) return;
+        const action = target.dataset.action;
 
-function getSelectedUrls(containerId, items) {
-    const urls = [];
-    document.querySelectorAll(`#${containerId} tr.selected`).forEach((tr) => {
-        const it = items[parseInt(tr.dataset.idx)];
-        if (it) urls.push(`https://www.pixiv.net/artworks/${it.id}`);
-    });
-    return urls;
-}
-
-function formatNum(n) {
-    return (n || 0).toLocaleString();
-}
-function truncate(s, n) {
-    return !s ? "" : s.length > n ? s.slice(0, n) + "..." : s;
-}
-function escapeHtml(s) {
-    if (!s) return "";
-    return String(s).replace(
-        /[&<>"']/g,
-        (c) =>
-            ({
-                "&": "&amp;",
-                "<": "&lt;",
-                ">": "&gt;",
-                '"': "&quot;",
-                "'": "&#39;",
-            })[c],
-    );
-}
-
-// ============ Selection ============
-function getActiveTab() {
-    const active = document.querySelector("nav button.active");
-    return active ? active.dataset.tab : null;
-}
-
-function getSelectionInfo() {
-    const tab = getActiveTab();
-    if (tab === "ranking")
-        return { containerId: "ranking-list", items: rankingItems };
-    if (tab === "search")
-        return { containerId: "search-list", items: searchItems };
-    if (tab === "recommend")
-        return { containerId: "recommend-list", items: recommendItems };
-    if (tab === "follow")
-        return { containerId: "follow-list", items: followItems };
-    if (tab === "user-detail")
-        return { containerId: "user-detail-list", items: userDetailItems };
-    return null;
-}
-
-function getSelectionCount() {
-    const info = getSelectionInfo();
-    if (!info) return 0;
-    const container = document.getElementById(info.containerId);
-    if (!container) return 0;
-    return container.querySelectorAll("tr.selected").length;
-}
-
-function updateSelectionCount() {
-    const count = getSelectionCount();
-
-    const ball = document.getElementById("float-ball");
-    const ballCount = document.getElementById("ball-count");
-    if (ball) {
-        if (count > 0) {
-            ball.classList.add("show");
-            if (ballCount) ballCount.textContent = count;
-        } else {
-            ball.classList.remove("show");
+        if (action === "toggle-checkbox") {
+            e.preventDefault();
+            e.stopPropagation();
+            onCheckboxClick(
+                e,
+                target.dataset.container,
+                parseInt(target.dataset.idx, 10),
+            );
+            return;
         }
+        if (action === "open-illust") {
+            e.preventDefault();
+            e.stopPropagation();
+            openIllustViewer(
+                target.dataset.container,
+                parseInt(target.dataset.idx, 10),
+            );
+            return;
+        }
+        if (action === "open-user") {
+            e.preventDefault();
+            e.stopPropagation();
+            const uid = parseInt(target.dataset.uid, 10);
+            if (uid) openUserDetail(uid);
+            return;
+        }
+        if (action === "tag-search") {
+            e.preventDefault();
+            e.stopPropagation();
+            onTagClick(e, target);
+            return;
+        }
+    },
+    true,
+);
+
+// ============ Tag click ============
+function onTagClick(evt, el) {
+    if (evt) evt.stopPropagation();
+    let tag = el.dataset.tag || "";
+    const m = tag.match(/^([^(]+?)(?:\(.+\))?$/);
+    if (m) tag = m[1].trim();
+    if (!tag) return;
+
+    const navBtn = document.querySelector('nav button[data-tab="search"]');
+    if (navBtn) navBtn.click();
+
+    setEl("search-tag", (el) => (el.value = tag));
+    setEl("search-target", (el) => (el.value = "exact_match_for_tags"));
+
+    const modeSel = document.getElementById("search-mode");
+    if (modeSel && modeSel.value !== "illust") {
+        modeSel.value = "illust";
+        onSearchModeChange();
     }
 
-    // Legacy selectors (may not exist) / 兼容旧按钮
-    const btn = document.getElementById("btn-add-selected");
-    if (btn) {
-        btn.innerHTML = `${t("btn_add_selected")} (${count})`;
-        const isRunning =
-            document.getElementById("btn-start")?.disabled || false;
-        btn.disabled = count === 0 || isRunning;
-    }
-
-    const btnRec = document.getElementById("btn-recommend-selected");
-    if (btnRec) {
-        btnRec.innerHTML = `${t("btn_recommend_selected")} (${count})`;
-        btnRec.disabled = count === 0;
-    }
+    closeIllustViewer();
+    setTimeout(doSearch, 30);
 }
 
-function onFloatBallClick() {
-    const info = getSelectionInfo();
-    if (!info) return;
-    const urls = getSelectedUrls(info.containerId, info.items);
-    if (!urls.length) return;
-    send({ cmd: "add_urls", urls });
-    document
-        .querySelectorAll(`#${info.containerId} tr.selected`)
-        .forEach((tr) => tr.classList.remove("selected"));
-    updateSelectionCount();
-    toast(t("toast_selected_queued", urls.length), "success");
-}
-
-// ============ Ranking ============
-function fetchRanking() {
-    const mode = document.getElementById("ranking-mode").value;
-    document.getElementById("ranking-list").innerHTML =
-        `<div class="loading"><div class="spinner"></div>${t("loading_ranking")}</div>`;
-    document.getElementById("btn-fetch-ranking").disabled = true;
-    document.getElementById("ranking-status").textContent = t(
-        "status_requesting",
-        `${mode} / 480`,
-    );
-    send({ cmd: "ranking", mode, limit: 480 });
-}
-
-function renderRankingResults(items, stats) {
-    rankingItemsAll = items;
-    filterSets["ranking-tag-cloud"].clear();
-    rankingItems = items.slice();
-    buildTagCloud("ranking-tag-cloud", items, "filterRankingByTags");
-    renderTable("ranking-list", rankingItems);
-    const btn = document.getElementById("btn-fetch-ranking");
-    if (btn) btn.disabled = false;
-
-    const todayCount = stats?.today ?? items.length;
-    const yesterdayCount = stats?.yesterday ?? 0;
-    const newCount = stats?.new ?? items.filter((x) => x.is_new).length;
-
-    const statusEl = document.getElementById("ranking-status");
-    if (statusEl) statusEl.textContent = t("status_done_ranking", todayCount);
-
-    toast(
-        `${t("toast_ranking_done", todayCount)} · NEW ${newCount} (yesterday: ${yesterdayCount})`,
-        "success",
-    );
-    scheduleUiStateSave();
-}
-
-function filterRankingByTags() {
-    const chipTags = [...filterSets["ranking-tag-cloud"]].map((x) =>
-        x.toLowerCase(),
-    );
-    if (chipTags.length === 0) {
-        rankingItems = rankingItemsAll.slice();
-    } else {
-        rankingItems = rankingItemsAll.filter((it) => {
-            const tagStr = (it.tags || []).join(" ").toLowerCase();
-            return chipTags.every((k) => tagStr.includes(k));
-        });
-    }
-    renderTable("ranking-list", rankingItems);
-}
-
-function clearRankingFilter() {
-    filterSets["ranking-tag-cloud"].clear();
-    document
-        .querySelectorAll("#ranking-tag-cloud .tag-chip")
-        .forEach((el) => el.classList.remove("active"));
-    filterRankingByTags();
-}
+// ============ Nav ============
+document.querySelectorAll("nav button").forEach((btn) => {
+    btn.onclick = () => {
+        document
+            .querySelectorAll("nav button")
+            .forEach((b) => b.classList.remove("active"));
+        document
+            .querySelectorAll(".tab")
+            .forEach((t) => t.classList.remove("active"));
+        btn.classList.add("active");
+        document
+            .getElementById("tab-" + btn.dataset.tab)
+            .classList.add("active");
+        applyUserBgVisibility();
+        updateSelectionCount();
+        scheduleUiStateSave();
+    };
+});
 
 // ============ Search ============
+function onSearchModeChange() {
+    const mode = document.getElementById("search-mode").value;
+    setEl(
+        "search-pane-illust",
+        (el) => (el.style.display = mode === "illust" ? "" : "none"),
+    );
+    setEl(
+        "search-pane-user",
+        (el) => (el.style.display = mode === "user" ? "" : "none"),
+    );
+}
+
+function onDurationChange() {
+    const v = document.getElementById("search-duration").value;
+    setEl(
+        "search-custom-dates",
+        (el) => (el.style.display = v === "custom" ? "" : "none"),
+    );
+}
+
 function doSearch() {
     const tag = document.getElementById("search-tag").value.trim();
     if (!tag) return toast(t("toast_need_tag"), "error");
@@ -1154,34 +950,27 @@ function doSearch() {
     const pages = parseInt(document.getElementById("search-pages").value) || 1;
     const fIllust = document.getElementById("search-type-illust").checked;
     const fManga = document.getElementById("search-type-manga").checked;
-    if (!fIllust && !fManga) {
-        return toast(t("toast_need_type"), "error");
-    }
+    if (!fIllust && !fManga) return toast(t("toast_need_type"), "error");
 
-    let duration = undefined;
-    let start_date = undefined;
-    let end_date = undefined;
-
+    let duration, start_date, end_date;
     if (durationRaw === "custom") {
         start_date = document.getElementById("search-start-date").value || "";
         end_date = document.getElementById("search-end-date").value || "";
-        if (!start_date || !end_date) {
+        if (!start_date || !end_date)
             return toast(t("toast_need_dates"), "error");
-        }
-        if (start_date > end_date) {
-            return toast(t("toast_date_order"), "error");
-        }
+        if (start_date > end_date) return toast(t("toast_date_order"), "error");
     } else if (durationRaw) {
         duration = durationRaw;
     }
 
-    document.getElementById("search-list").innerHTML =
-        `<div class="loading"><div class="spinner"></div>${t("loading_search")}</div>`;
-    document.getElementById("btn-search").disabled = true;
-    document.getElementById("search-status").textContent = t(
-        "status_requesting",
-        `${tag} | ${startPage}→${startPage + pages - 1}`,
+    setSearchLoading(
+        t(
+            "status_requesting",
+            `${tag} | ${startPage}→${startPage + pages - 1}`,
+        ),
     );
+    document.getElementById("btn-search").disabled = true;
+
     send({
         cmd: "search",
         tag,
@@ -1196,17 +985,18 @@ function doSearch() {
     });
 }
 
-function searchEncyclopedia() {
-    const tag = document.getElementById("search-tag")?.value.trim();
-    if (!tag) return toast(t("toast_need_tag_for_encyclopedia"), "error");
-    const url = `https://zh.moegirl.org.cn/index.php?fulltext=1&search=%22${encodeURIComponent(tag)}%22&title=Special%3A%E6%90%9C%E7%B4%A2`;
-    window.open(url, "_blank", "noopener");
+function setSearchLoading(text) {
+    setEl(
+        "search-list",
+        (el) =>
+            (el.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_search")}</div>`),
+    );
+    setEl("search-status", (el) => (el.textContent = text));
 }
 
 function renderSearchResults(items, startPage, pages) {
     searchItemsRaw = items;
     applySearchBookmarkFilter(startPage, pages);
-    scheduleUiStateSave();
 }
 
 function applySearchBookmarkFilter(startPage, pages) {
@@ -1232,17 +1022,140 @@ function applySearchBookmarkFilter(startPage, pages) {
             filtered.length !== searchItemsRaw.length
                 ? ` (filtered ${filtered.length}/${searchItemsRaw.length})`
                 : "";
-        document.getElementById("search-status").textContent =
-            t("status_done_search", startPage, pages, filtered.length) + suffix;
+        setEl(
+            "search-status",
+            (el) =>
+                (el.textContent =
+                    t("status_done_search", startPage, pages, filtered.length) +
+                    suffix),
+        );
         toast(t("toast_search_done", filtered.length), "success");
     } else {
         const total = searchItemsRaw.length;
         const shown = filtered.length;
-        document.getElementById("search-status").textContent =
-            bmMin > 0 || bmMax > 0
-                ? t("status_filter", shown, total)
-                : t("status_done", total);
+        setEl(
+            "search-status",
+            (el) =>
+                (el.textContent =
+                    bmMin > 0 || bmMax > 0
+                        ? t("status_filter", shown, total)
+                        : t("status_done", total)),
+        );
     }
+}
+
+function doUserSearch() {
+    const word = document.getElementById("usearch-word").value.trim();
+    if (!word) return toast(t("toast_need_keyword"), "error");
+    const page = parseInt(document.getElementById("usearch-page").value) || 1;
+    const offset = (page - 1) * 30;
+
+    setEl(
+        "search-list",
+        (el) =>
+            (el.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_usearch")}</div>`),
+    );
+    setEl("btn-user-search", (el) => (el.disabled = true));
+    setEl(
+        "usearch-status",
+        (el) => (el.textContent = t("status_requesting", word)),
+    );
+
+    send({ cmd: "search_users", word, offset });
+}
+
+function renderUserSearchResults(items) {
+    userSearchItems = items;
+    const container = document.getElementById("search-list");
+    if (!container) return;
+
+    if (!items.length) {
+        container.innerHTML = `<div class="empty-msg">${t("no_result")}</div>`;
+    } else {
+        const rows = items
+            .map(
+                (u) => `
+            <tr>
+                <td>${u.id}</td>
+                <td><a href="#" class="user-link"
+                       data-action="open-user" data-uid="${u.id}"
+                       title="${t("th_user_detail_link")}">${escapeHtml(u.name)}</a></td>
+                <td style="color:var(--text-tertiary)">${escapeHtml(u.account)}</td>
+                <td>${u.is_followed ? `<span style="color:var(--success)">${t("th_followed_yes")}</span>` : ""}</td>
+            </tr>`,
+            )
+            .join("");
+        container.innerHTML = `<table>
+            <thead><tr>
+                <th>${t("th_uid")}</th><th>${t("th_name")}</th>
+                <th>${t("th_account")}</th><th>${t("th_followed")}</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+        </table>`;
+    }
+
+    setEl("btn-user-search", (el) => (el.disabled = false));
+    setEl(
+        "usearch-status",
+        (el) => (el.textContent = t("status_done", items.length)),
+    );
+    toast(t("toast_user_search_done", items.length), "success");
+}
+
+// ============ Ranking ============
+function fetchRanking() {
+    const mode = document.getElementById("ranking-mode").value;
+    setRankingLoading(mode, "");
+    document.getElementById("btn-fetch-ranking").disabled = true;
+    send({ cmd: "ranking", mode, limit: 480 });
+}
+
+function setRankingLoading(phase, count) {
+    setEl(
+        "ranking-list",
+        (el) =>
+            (el.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_ranking")} (${phase}: ${count})</div>`),
+    );
+    setEl(
+        "ranking-status",
+        (el) => (el.textContent = t("status_requesting", `${phase}: ${count}`)),
+    );
+}
+
+function renderRankingResults(items, stats) {
+    rankingItemsAll = items;
+    filterSets["ranking-tag-cloud"].clear();
+    rankingItems = items.slice();
+    buildTagCloud("ranking-tag-cloud", items, "filterRankingByTags");
+    renderTable("ranking-list", rankingItems);
+    document.getElementById("btn-fetch-ranking").disabled = false;
+
+    const todayCount = stats?.today ?? items.length;
+    const yCount = stats?.yesterday ?? 0;
+    const newCount = stats?.new ?? 0;
+    setEl(
+        "ranking-status",
+        (el) => (el.textContent = t("status_done_ranking", todayCount)),
+    );
+    toast(
+        `${t("toast_ranking_done", todayCount)} · NEW ${newCount} (y: ${yCount})`,
+        "success",
+    );
+    scheduleUiStateSave();
+}
+
+function filterRankingByTags() {
+    const chipTags = [...filterSets["ranking-tag-cloud"]].map((x) =>
+        x.toLowerCase(),
+    );
+    if (chipTags.length === 0) rankingItems = rankingItemsAll.slice();
+    else {
+        rankingItems = rankingItemsAll.filter((it) => {
+            const s = (it.tags || []).join(" ").toLowerCase();
+            return chipTags.every((k) => s.includes(k));
+        });
+    }
+    renderTable("ranking-list", rankingItems);
 }
 
 // ============ Tag cloud ============
@@ -1288,61 +1201,197 @@ function tagChipClick(el, cloudId, callbackName) {
     else if (callbackName === "applyFollowFilter") applyFollowFilter();
 }
 
-// ============ User search ============
-function doUserSearch() {
-    const word = document.getElementById("usearch-word").value.trim();
-    if (!word) return toast(t("toast_need_keyword"), "error");
-    const page = parseInt(document.getElementById("usearch-page").value) || 1;
-    const offset = (page - 1) * 30;
-
-    const container = document.getElementById("search-list");
-    if (container) {
-        container.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_usearch")}</div>`;
-    }
-    const btn = document.getElementById("btn-user-search");
-    if (btn) btn.disabled = true;
-    const statusEl = document.getElementById("usearch-status");
-    if (statusEl) statusEl.textContent = t("status_requesting", word);
-
-    send({ cmd: "search_users", word, offset });
+function toggleCloud(sectionId) {
+    const el = document.getElementById(sectionId);
+    if (el) el.classList.toggle("collapsed");
 }
 
-function renderUserSearchResults(items) {
-    userSearchItems = items;
-    const container = document.getElementById("search-list");
-    if (!container) return;
+// ============ Follow filter ============
+function applyFollowFilter() {
+    const chipTags = [...filterSets["follow-tag-cloud"]].map((x) =>
+        x.toLowerCase(),
+    );
+    const chipAuthors = [...filterSets["follow-author-cloud"]];
+    let filtered = followItemsAll.slice();
+    if (chipTags.length) {
+        filtered = filtered.filter((it) => {
+            const s = (it.tags || []).join(" ").toLowerCase();
+            return chipTags.every((k) => s.includes(k));
+        });
+    }
+    if (chipAuthors.length) {
+        filtered = filtered.filter((it) =>
+            chipAuthors.includes(it.author || ""),
+        );
+    }
+    followItems = filtered;
+    renderTable("follow-list", followItems);
+}
 
-    if (!items.length) {
-        container.innerHTML = `<div class="empty-msg">${t("no_result")}</div>`;
-    } else {
-        const rows = items
-            .map(
-                (u) => `
-            <tr>
-                <td>${u.id}</td>
-                <td><a href="#" onclick="event.preventDefault(); openUserDetail(${u.id}); return false;"
-                       style="color:var(--accent); text-decoration:none; border-bottom:1px dashed var(--accent);"
-                       title="${t("th_user_detail_link")}">${escapeHtml(u.name)}</a></td>
-                <td style="color:var(--text-tertiary)">${escapeHtml(u.account)}</td>
-                <td>${u.is_followed ? `<span style="color:var(--success)">${t("th_followed_yes")}</span>` : ""}</td>
-            </tr>`,
-            )
-            .join("");
-        container.innerHTML = `<table>
-            <thead><tr>
-                <th>${t("th_uid")}</th><th>${t("th_name")}</th>
-                <th>${t("th_account")}</th><th>${t("th_followed")}</th>
-            </tr></thead>
-            <tbody>${rows}</tbody>
-        </table>`;
+// ============ Follow new ============
+function loadFollowNew(offset) {
+    const restrict = document.getElementById("follow-restrict").value;
+    setFollowLoading(0);
+    document.getElementById("btn-load-follow").disabled = true;
+    send({ cmd: "follow_new", offset, restrict });
+}
+
+function setFollowLoading(count) {
+    setEl(
+        "follow-list",
+        (el) =>
+            (el.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_follow")} (${count})</div>`),
+    );
+}
+
+function renderFollowResults(items, offset, hasMore, batchSize) {
+    const btn = document.getElementById("btn-load-follow");
+    if (btn) btn.disabled = false;
+
+    followItemsAll = items;
+    followCurrentOffset = offset;
+    followBatchSize = batchSize || 300;
+    followItems = items.slice();
+    filterSets["follow-tag-cloud"].clear();
+    filterSets["follow-author-cloud"].clear();
+
+    try {
+        buildTagCloud("follow-tag-cloud", items, "applyFollowFilter", "tags");
+        buildTagCloud(
+            "follow-author-cloud",
+            items,
+            "applyFollowFilter",
+            "author",
+        );
+        renderTable("follow-list", followItems);
+    } catch (e) {
+        console.error(e);
+        return;
     }
 
-    const btn = document.getElementById("btn-user-search");
-    if (btn) btn.disabled = false;
-    const statusEl = document.getElementById("usearch-status");
-    if (statusEl) statusEl.textContent = t("status_done", items.length);
+    const page = Math.floor(offset / followBatchSize) + 1;
+    setEl(
+        "follow-status",
+        (el) => (el.textContent = t("status_done", items.length)),
+    );
+    const pageEl = document.getElementById("follow-page-info");
+    if (pageEl) pageEl.textContent = t("page_label", page);
 
-    toast(t("toast_user_search_done", items.length), "success");
+    if (!hasMore) {
+        toast(t("toast_follow_end"), "warn");
+        if (pageEl) pageEl.textContent += " · " + t("toast_follow_end");
+    } else {
+        toast(t("toast_follow_done", items.length), "success");
+    }
+    scheduleUiStateSave();
+}
+
+function followPrevPage() {
+    if (followCurrentOffset <= 0) return toast(t("toast_first_page"), "error");
+    loadFollowNew(Math.max(0, followCurrentOffset - followBatchSize));
+}
+
+function followNextPage() {
+    loadFollowNew(followCurrentOffset + followBatchSize);
+}
+
+// ============ Recommend ============
+function doRecommend(mode) {
+    let pid = null;
+    if (mode === "work") {
+        const v = document.getElementById("recommend-pid").value.trim();
+        if (!v) return toast(t("toast_need_pid"), "error");
+        pid = parseInt(v);
+        if (!pid || pid <= 0) return toast(t("toast_invalid_pid"), "error");
+    }
+    setEl(
+        "recommend-list",
+        (el) =>
+            (el.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_recommend")}</div>`),
+    );
+    setEl(
+        "recommend-status",
+        (el) => (el.textContent = t("status_requesting", mode)),
+    );
+    document.getElementById("btn-rec-auto").disabled = true;
+
+    const cmd = { cmd: "recommend", mode, limit: 120 };
+    if (pid) cmd.pid = pid;
+    send(cmd);
+}
+
+function renderRecommendResults(items, mode) {
+    recommendItems = items;
+    renderTable("recommend-list", items);
+    document.getElementById("btn-rec-auto").disabled = false;
+    setEl(
+        "recommend-status",
+        (el) =>
+            (el.textContent = t("status_done_recommend", items.length, mode)),
+    );
+    toast(t("toast_recommend_done", items.length), "success");
+    scheduleUiStateSave();
+}
+
+function openAdvancedRecommend() {
+    document.getElementById("advanced-rec-modal").classList.add("show");
+}
+
+function closeAdvancedRecommend() {
+    document.getElementById("advanced-rec-modal").classList.remove("show");
+}
+
+function submitAdvancedRecommend() {
+    const seedsRaw = document.getElementById("adv-seeds").value.trim();
+    const viewedRaw = document.getElementById("adv-viewed").value.trim();
+    const includeRanking = document.getElementById("adv-ranking").checked;
+    const includePrivacy = document.getElementById("adv-privacy").checked;
+    const limit = parseInt(document.getElementById("adv-limit").value) || 60;
+
+    const seedList = seedsRaw
+        ? seedsRaw
+              .split(",")
+              .map((s) => s.trim())
+              .filter((s) => s)
+        : [];
+    for (const s of seedList) {
+        if (!/^\d+$/.test(s))
+            return toast(t("toast_adv_seeds_invalid", s), "error");
+    }
+    if (seedList.length > 30) return toast(t("toast_adv_seeds_max"), "error");
+
+    const viewedList = viewedRaw
+        ? viewedRaw
+              .split(",")
+              .map((s) => s.trim())
+              .filter((s) => s)
+        : [];
+    for (const v of viewedList) {
+        if (!/^\d+$/.test(v))
+            return toast(t("toast_adv_viewed_invalid", v), "error");
+    }
+    if (viewedList.length > 30)
+        return toast(t("toast_adv_viewed_max"), "error");
+    if (limit < 1 || limit > 120) return toast(t("toast_adv_limit"), "error");
+
+    closeAdvancedRecommend();
+    const params = {};
+    if (seedList.length) params.bookmark_illust_ids = seedList;
+    if (viewedList.length) params.viewed = viewedList;
+    if (includeRanking) params.include_ranking_illusts = true;
+    if (includePrivacy) params.include_privacy_policy = true;
+
+    setEl(
+        "recommend-list",
+        (el) =>
+            (el.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_adv_recommend")}</div>`),
+    );
+    setEl(
+        "recommend-status",
+        (el) => (el.textContent = t("status_requesting", "advanced")),
+    );
+    document.getElementById("btn-rec-auto").disabled = true;
+    send({ cmd: "recommend", mode: "advanced", limit, params });
 }
 
 // ============ User detail ============
@@ -1356,18 +1405,18 @@ function openUserDetail(uid) {
     const navBtn = document.querySelector('nav button[data-tab="user-detail"]');
     if (navBtn) navBtn.classList.add("active");
     document.getElementById("tab-user-detail").classList.add("active");
-
-    // Clear any previous background before loading new user / 加载新用户前清空旧背景
     document.body.classList.remove("has-user-bg");
 
-    document.getElementById("udetail-uid").value = uid;
+    setEl("udetail-uid", (el) => (el.value = uid));
     resetUserDetailView();
 
-    document.getElementById("udetail-header").innerHTML =
-        `<div class="loading"><div class="spinner"></div>${t("loading_user")}</div>`;
-    document.getElementById("udetail-status").textContent = `UID: ${uid}`;
+    setEl(
+        "udetail-header",
+        (el) =>
+            (el.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_user")}</div>`),
+    );
+    setEl("udetail-status", (el) => (el.textContent = `UID: ${uid}`));
     document.getElementById("btn-load-udetail").disabled = true;
-
     send({ cmd: "user_detail", uid });
 }
 
@@ -1376,19 +1425,13 @@ function resetUserDetailView() {
     userDetailItems = [];
     userDetailAllItems = [];
     currentUserDetail = null;
-
     document.body.style.removeProperty("--user-bg");
     document.body.classList.remove("has-user-bg");
 
-    const cloud = document.getElementById("udetail-tag-cloud");
-    if (cloud) cloud.innerHTML = "";
+    setEl("udetail-tag-cloud", (el) => (el.innerHTML = ""));
     filterSets["udetail-tag-cloud"] = new Set();
-
-    const list = document.getElementById("user-detail-list");
-    if (list) list.innerHTML = "";
-
-    const header = document.getElementById("udetail-header");
-    if (header) header.innerHTML = "";
+    setEl("user-detail-list", (el) => (el.innerHTML = ""));
+    setEl("udetail-header", (el) => (el.innerHTML = ""));
 }
 
 function loadUserDetailFromInput() {
@@ -1403,13 +1446,20 @@ function handleUserDetailPhase(msg) {
     if (msg.phase === "detail") {
         renderUserHeaderOnly(msg.user);
     } else if (msg.phase === "illusts") {
-        document.getElementById("udetail-status").textContent = t(
-            "status_loading_user_illusts",
-            msg.page,
-            msg.count,
+        setEl(
+            "udetail-status",
+            (el) =>
+                (el.textContent = t(
+                    "status_loading_user_illusts",
+                    msg.page,
+                    msg.count,
+                )),
         );
-        document.getElementById("user-detail-list").innerHTML =
-            `<div class="loading"><div class="spinner"></div>${t("loading_user_illusts", msg.page)}</div>`;
+        setEl(
+            "user-detail-list",
+            (el) =>
+                (el.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_user_illusts", msg.page)}</div>`),
+        );
     }
 }
 
@@ -1418,72 +1468,8 @@ function buildUserCardHtml(user) {
         ? `/proxy_image?url=${encodeURIComponent(user.avatar)}`
         : "";
     const avatarHtml = avatarProxy
-        ? `<img class="user-avatar" src="${avatarProxy}" alt="avatar"
-                onerror="this.style.background='#3a3f48'; this.removeAttribute('src');">`
-        : '<div class="user-avatar"></div>';
-    const officialUrl = `https://www.pixiv.net/users/${user.id}`;
-    const metaParts = [];
-    if (user.region)
-        metaParts.push(`${t("meta_region")} ${escapeHtml(user.region)}`);
-    if (user.total_follow_users)
-        metaParts.push(
-            `${t("meta_followers")} ${formatNum(user.total_follow_users)}`,
-        );
-    if (user.total_illusts)
-        metaParts.push(`${t("meta_illusts")} ${user.total_illusts}`);
-    if (user.total_novels)
-        metaParts.push(`${t("meta_novels")} ${user.total_novels}`);
-    if (user.total_manga)
-        metaParts.push(`${t("meta_manga")} ${user.total_manga}`);
-    if (user.is_accept_request === true) {
-        metaParts.push(
-            `<span style="color:#4ade80">${t("meta_accept_request_yes")}</span>`,
-        );
-    } else if (user.is_accept_request === false) {
-        metaParts.push(
-            `<span style="color:#808590">${t("meta_accept_request_no")}</span>`,
-        );
-    }
-    const commentHtml = user.comment
-        ? `<div class="user-comment">${escapeHtml(user.comment)}</div>`
-        : "";
-    return `
-        <div class="user-card">
-            ${avatarHtml}
-            <div class="user-info">
-                <div>
-                    <a class="user-name" href="${officialUrl}" target="_blank" rel="noopener"
-                       title="${t("th_user_name_link")}">${escapeHtml(user.name)}</a>
-                    <span class="user-account">@${escapeHtml(user.account)} (UID: ${user.id})</span>
-                    ${user.is_followed ? `<span style="color:#4ade80; margin-left:8px; font-size:12px">${t("meta_following")}</span>` : ""}
-                </div>
-                <div class="user-meta">${metaParts.join("")}</div>
-                ${commentHtml}
-            </div>
-        </div>`;
-}
-
-let currentUserDetail = null;
-
-function renderUserHeaderOnly(user) {
-    currentUserDetail = user;
-
-    // Background image / 背景图
-    if (user.background_image_url) {
-        const proxy = `/proxy_image?url=${encodeURIComponent(user.background_image_url)}`;
-        document.body.style.setProperty("--user-bg", `url("${proxy}")`);
-    } else {
-        document.body.style.removeProperty("--user-bg");
-    }
-
-    applyUserBgVisibility();
-
-    const avatarProxy = user.avatar
-        ? `/proxy_image?url=${encodeURIComponent(user.avatar)}`
-        : "";
-    const avatarHtml = avatarProxy
-        ? `<img class="user-avatar" src="${avatarProxy}" alt="avatar"
-                onerror="this.style.background='#3a3f48'; this.removeAttribute('src');">`
+        ? `<img class="user-avatar" src="${avatarProxy}" alt=""
+                onerror="this.onerror=null; this.removeAttribute('src');">`
         : '<div class="user-avatar"></div>';
 
     const officialUrl = `https://www.pixiv.net/users/${user.id}`;
@@ -1507,11 +1493,14 @@ function renderUserHeaderOnly(user) {
         ? `<button class="follow-btn following" onclick="toggleFollow()">${t("following_btn")}</button>`
         : `<button class="follow-btn" onclick="toggleFollow()">${t("follow_btn")}</button>`;
 
-    const commentHtml = user.comment
-        ? `<div class="user-comment">${escapeHtml(user.comment)}</div>`
-        : "";
+    let commentHtml = "";
+    if (Array.isArray(user.comment_parts) && user.comment_parts.length) {
+        commentHtml = `<div class="user-comment">${renderCommentParts(user.comment_parts)}</div>`;
+    } else if (user.comment) {
+        commentHtml = `<div class="user-comment">${escapeHtml(user.comment).replace(/\n/g, "<br>")}</div>`;
+    }
 
-    document.getElementById("udetail-header").innerHTML = `
+    return `
         <div class="user-card">
             ${avatarHtml}
             <div class="user-info">
@@ -1527,14 +1516,20 @@ function renderUserHeaderOnly(user) {
                 ${commentHtml}
             </div>
         </div>`;
-    document.getElementById("btn-load-udetail").disabled = false;
 }
 
-function toggleFollow() {
-    if (!currentUserDetail) return;
-    const uid = currentUserDetail.id;
-    const action = currentUserDetail.is_followed ? "unfollow" : "follow";
-    send({ cmd: "follow_user", uid, action });
+function renderUserHeaderOnly(user) {
+    currentUserDetail = user;
+    if (user.background_image_url) {
+        const proxy = `/proxy_image?url=${encodeURIComponent(user.background_image_url)}`;
+        document.body.style.setProperty("--user-bg", `url("${proxy}")`);
+    } else {
+        document.body.style.removeProperty("--user-bg");
+    }
+    applyUserBgVisibility();
+
+    setEl("udetail-header", (el) => (el.innerHTML = buildUserCardHtml(user)));
+    document.getElementById("btn-load-udetail").disabled = false;
 }
 
 function applyUserBgVisibility() {
@@ -1542,21 +1537,24 @@ function applyUserBgVisibility() {
     const hasBg = !!(
         currentUserDetail && currentUserDetail.background_image_url
     );
-    if (activeTab === "user-detail" && hasBg) {
+    if (activeTab === "user-detail" && hasBg)
         document.body.classList.add("has-user-bg");
-    } else {
-        document.body.classList.remove("has-user-bg");
-    }
+    else document.body.classList.remove("has-user-bg");
 }
 
 function renderUserDetail(user, items) {
     userDetailUid = user.id;
     renderUserHeaderOnly(user);
-    document.getElementById("udetail-uid").value = user.id;
-    document.getElementById("udetail-status").textContent = t(
-        "status_done",
-        `${user.name} (${items.length})`,
+    setEl("udetail-uid", (el) => (el.value = user.id));
+    setEl(
+        "udetail-status",
+        (el) =>
+            (el.textContent = t(
+                "status_done",
+                `${user.name} (${items.length})`,
+            )),
     );
+
     userDetailAllItems = items.slice();
     userDetailItems = items.slice();
     buildTagCloud("udetail-tag-cloud", items, "applyUserDetailFilter");
@@ -1569,247 +1567,410 @@ function applyUserDetailFilter() {
     const chipTags = [...filterSets["udetail-tag-cloud"]].map((x) =>
         x.toLowerCase(),
     );
-    if (chipTags.length === 0) {
-        userDetailItems = userDetailAllItems.slice();
-    } else {
+    if (chipTags.length === 0) userDetailItems = userDetailAllItems.slice();
+    else {
         userDetailItems = userDetailAllItems.filter((it) => {
-            const tagStr = (it.tags || []).join(" ").toLowerCase();
-            return chipTags.every((k) => tagStr.includes(k));
+            const s = (it.tags || []).join(" ").toLowerCase();
+            return chipTags.every((k) => s.includes(k));
         });
     }
     renderTable("user-detail-list", userDetailItems);
 }
 
-function clearUserDetailFilter() {
-    filterSets["udetail-tag-cloud"].clear();
-    document
-        .querySelectorAll("#udetail-tag-cloud .tag-chip")
-        .forEach((el) => el.classList.remove("active"));
-    applyUserDetailFilter();
+function toggleFollow() {
+    if (!currentUserDetail) return;
+    const uid = currentUserDetail.id;
+    const action = currentUserDetail.is_followed ? "unfollow" : "follow";
+    send({ cmd: "follow_user", uid, action });
 }
 
-function clearUserDetailFilter() {
-    document.getElementById("udetail-filter").value = "";
-    filterSets["udetail-tag-cloud"].clear();
-    document
-        .querySelectorAll("#udetail-tag-cloud .tag-chip")
-        .forEach((el) => el.classList.remove("active"));
-    applyUserDetailFilter();
+// ============ Comment parts rendering ============
+function sanitizeUrl(url) {
+    if (!url) return null;
+    url = String(url).trim();
+    if (/^https?:\/\//i.test(url)) return url;
+    if (url.startsWith("/")) return "https://www.pixiv.net" + url;
+    return null;
 }
 
-// ============ Recommend ============
-function doRecommend(mode) {
-    let pid = null;
-    if (mode === "work") {
-        const v = document.getElementById("recommend-pid").value.trim();
-        if (!v) return toast(t("toast_need_pid"), "error");
-        pid = parseInt(v);
-        if (!pid || pid <= 0) return toast(t("toast_invalid_pid"), "error");
+function renderCommentParts(parts) {
+    if (!parts || !parts.length) return "";
+    return parts
+        .map((p) => {
+            if (!p || typeof p !== "object") return "";
+            if (p.type === "text") {
+                return escapeHtml(p.value || "").replace(/\n/g, "<br>");
+            }
+            if (p.type === "link") {
+                const href = sanitizeUrl(p.href);
+                if (!href) return escapeHtml(p.text || p.href || "");
+                const text = escapeHtml(p.text || p.href || "");
+                return `<a href="${escapeHtml(href)}" target="_blank"
+                       rel="noopener noreferrer" class="comment-link">${text}</a>`;
+            }
+            return "";
+        })
+        .join("");
+}
+
+// ============ Illust viewer ============
+function getIllustPages(slim) {
+    const pages = [];
+    if (!slim) return pages;
+
+    const pageCount = slim.page_count || 1;
+    const metaPages = slim.meta_pages || [];
+    const single = slim.meta_single_page || {};
+
+    if (pageCount === 1 || metaPages.length === 0) {
+        const primary =
+            single.large_image_url || single.original_image_url || "";
+        const fallback = single.original_image_url || primary;
+        if (primary) pages.push({ primary, fallback });
+    } else {
+        for (const p of metaPages) {
+            const im = p.image_urls || {};
+            const primary = im.large || im.medium || "";
+            const fallback = im.original || primary;
+            if (primary) pages.push({ primary, fallback });
+        }
     }
-    document.getElementById("recommend-list").innerHTML =
-        `<div class="loading"><div class="spinner"></div>${t("loading_recommend")}</div>`;
-    document.getElementById("recommend-status").textContent = t(
-        "status_requesting",
-        mode,
+    return pages;
+}
+
+function openIllustViewer(containerId, idx) {
+    const getter = tableItemGetters[containerId];
+    if (!getter) return;
+    const items = getter();
+    const it = items[idx];
+    if (!it) return;
+
+    ivState.containerId = containerId;
+    ivState.items = items;
+    ivState.idx = idx;
+
+    renderIllustViewer();
+    document.getElementById("illust-viewer-modal").classList.add("show");
+}
+
+function closeIllustViewer() {
+    document.getElementById("illust-viewer-modal").classList.remove("show");
+    const img = document.getElementById("iv-image");
+    if (img) {
+        img.onerror = null;
+        img.src = "";
+    }
+}
+
+function illustViewerPrev() {
+    if (ivState.idx > 0) {
+        ivState.idx--;
+        renderIllustViewer();
+    }
+}
+
+function illustViewerNext() {
+    if (ivState.idx < ivState.items.length - 1) {
+        ivState.idx++;
+        renderIllustViewer();
+    }
+}
+
+function illustViewerPagePrev() {
+    if (ivState.pageIdx > 0) {
+        ivState.pageIdx--;
+        renderIvImage();
+    }
+}
+
+function illustViewerPageNext() {
+    if (ivState.pageIdx < ivState.pages.length - 1) {
+        ivState.pageIdx++;
+        renderIvImage();
+    }
+}
+
+function renderIllustViewer() {
+    const it = ivState.items[ivState.idx];
+    if (!it) return;
+    const slim = it._slim_illust || {};
+    const user = slim.user || {};
+
+    setEl(
+        "iv-index",
+        (el) =>
+            (el.textContent = `${ivState.idx + 1} / ${ivState.items.length}`),
     );
-    document.getElementById("btn-rec-auto").disabled = true;
-    const cmd = { cmd: "recommend", mode, limit: 120 };
-    if (pid) cmd.pid = pid;
-    send(cmd);
-}
-
-function renderRecommendResults(items, mode) {
-    recommendItems = items;
-    renderTable("recommend-list", items);
-    document.getElementById("btn-rec-auto").disabled = false;
-    document.getElementById("recommend-status").textContent = t(
-        "status_done_recommend",
-        items.length,
-        mode,
+    setEl("iv-prev", (el) => (el.disabled = ivState.idx <= 0));
+    setEl(
+        "iv-next",
+        (el) => (el.disabled = ivState.idx >= ivState.items.length - 1),
     );
-    toast(t("toast_recommend_done", items.length), "success");
-    scheduleUiStateSave();
+
+    ivState.pages = getIllustPages(slim);
+    ivState.pageIdx = 0;
+    renderIvImage();
+
+    const titleEl = document.getElementById("iv-title");
+    if (titleEl) {
+        titleEl.textContent = it.title || "";
+        titleEl.href = `https://www.pixiv.net/artworks/${it.id}`;
+        titleEl.title = t("iv_open_pixiv");
+    }
+
+    let badges = "";
+    if (it.is_new) badges += '<span class="badge new">NEW</span>';
+    if (it.ai_generated) badges += '<span class="badge ai">AI</span>';
+    if (it.restriction) {
+        const cls = it.restriction.toLowerCase().replace("-", "");
+        badges += `<span class="badge ${cls}">${it.restriction}</span>`;
+    }
+    setEl("iv-badges", (el) => (el.innerHTML = badges));
+
+    setEl("iv-views", (el) => (el.textContent = formatNum(it.views)));
+    setEl("iv-bookmarks", (el) => (el.textContent = formatNum(it.bookmarks)));
+    setEl("iv-likes", (el) => (el.textContent = formatNum(it.likes)));
+    setEl("iv-pages", (el) => (el.textContent = it.page_count || 1));
+    setEl("iv-date", (el) => (el.textContent = it.date || "—"));
+
+    const tagsHtml = (it.tags || [])
+        .map(
+            (tag) =>
+                `<span class="tag tag-clickable" data-action="tag-search"
+               data-tag="${escapeHtml(tag)}"
+               title="${t("tag_search_title")}">${escapeHtml(tag)}</span>`,
+        )
+        .join("");
+    setEl("iv-tags", (el) => (el.innerHTML = tagsHtml));
+
+    renderIvUser(user, it);
+    renderIvActions(it);
 }
 
-function openAdvancedRecommend() {
-    document.getElementById("advanced-rec-modal").classList.add("show");
-}
-function closeAdvancedRecommend() {
-    document.getElementById("advanced-rec-modal").classList.remove("show");
-}
+function renderIvUser(user, it) {
+    const container = document.getElementById("iv-user-card");
+    if (!container) return;
 
-function submitAdvancedRecommend() {
-    const seedsRaw = document.getElementById("adv-seeds").value.trim();
-    const viewedRaw = document.getElementById("adv-viewed").value.trim();
-    const includeRanking = document.getElementById("adv-ranking").checked;
-    const includePrivacy = document.getElementById("adv-privacy").checked;
-    const limit = parseInt(document.getElementById("adv-limit").value) || 60;
+    const uid = user.id || it.author_id;
+    const name = user.name || it.author || "";
+    const account = user.account || it.author_account || "";
+    const avatar =
+        (user.profile_image_urls && user.profile_image_urls.medium) ||
+        it.author_avatar ||
+        "";
 
-    const seedList = seedsRaw
-        ? seedsRaw
-              .split(",")
-              .map((s) => s.trim())
-              .filter((s) => s)
-        : [];
-    for (const s of seedList)
-        if (!/^\d+$/.test(s))
-            return toast(t("toast_adv_seeds_invalid", s), "error");
-    if (seedList.length > 30) return toast(t("toast_adv_seeds_max"), "error");
-    const viewedList = viewedRaw
-        ? viewedRaw
-              .split(",")
-              .map((s) => s.trim())
-              .filter((s) => s)
-        : [];
-    for (const v of viewedList)
-        if (!/^\d+$/.test(v))
-            return toast(t("toast_adv_viewed_invalid", v), "error");
-    if (viewedList.length > 30)
-        return toast(t("toast_adv_viewed_max"), "error");
-    if (limit < 1 || limit > 120) return toast(t("toast_adv_limit"), "error");
+    const avatarHtml = avatar
+        ? `<img class="iv-user-avatar"
+                src="/proxy_image?url=${encodeURIComponent(avatar)}"
+                alt=""
+                onerror="this.onerror=null; this.removeAttribute('src');">`
+        : '<div class="iv-user-avatar"></div>';
 
-    closeAdvancedRecommend();
-    const params = {};
-    if (seedList.length) params.bookmark_illust_ids = seedList;
-    if (viewedList.length) params.viewed = viewedList;
-    if (includeRanking) params.include_ranking_illusts = true;
-    if (includePrivacy) params.include_privacy_policy = true;
+    const nameHtml = uid
+        ? `<a class="iv-user-name" href="#" data-action="open-user"
+               data-uid="${uid}" title="${t("th_author_link")}">${escapeHtml(name)}</a>`
+        : `<span class="iv-user-name">${escapeHtml(name)}</span>`;
 
-    document.getElementById("recommend-list").innerHTML =
-        `<div class="loading"><div class="spinner"></div>${t("loading_adv_recommend")}</div>`;
-    document.getElementById("recommend-status").textContent = t(
-        "status_requesting",
-        "advanced",
-    );
-    document.getElementById("btn-rec-auto").disabled = true;
-    send({ cmd: "recommend", mode: "advanced", limit, params });
+    const accountHtml = account
+        ? `<div class="iv-user-account">@${escapeHtml(account)}</div>`
+        : "";
+
+    container.innerHTML = `
+        ${avatarHtml}
+        <div class="iv-user-info">
+            ${nameHtml}
+            ${accountHtml}
+        </div>`;
 }
 
-// ============ Follow ============
-function loadFollowNew(offset) {
-    const restrict = document.getElementById("follow-restrict").value;
-    document.getElementById("follow-list").innerHTML =
-        `<div class="loading"><div class="spinner"></div>${t("loading_follow")}</div>`;
-    document.getElementById("btn-load-follow").disabled = true;
-    document.getElementById("follow-status").textContent = t(
-        "status_requesting",
-        `offset=${offset}`,
-    );
-    send({ cmd: "follow_new", offset, restrict });
+function renderIvActions(it) {
+    const btn = document.getElementById("iv-bookmark-btn");
+    const label = document.getElementById("iv-bookmark-label");
+    if (!btn || !label) return;
+    const marked = !!it.is_bookmarked;
+    btn.classList.toggle("active", marked);
+    label.textContent = marked
+        ? t("btn_pixiv_bookmarked")
+        : t("btn_pixiv_bookmark");
 }
 
-function renderFollowResults(items, offset, hasMore, batchSize) {
-    // 先恢复按钮，避免渲染异常导致按钮永久禁用
-    const btn = document.getElementById("btn-load-follow");
-    if (btn) btn.disabled = false;
+function toggleIllustBookmark() {
+    const it = ivState.items?.[ivState.idx];
+    if (!it) return;
+    send({
+        cmd: "bookmark_toggle",
+        id: it.id,
+        action: it.is_bookmarked ? "delete" : "add",
+    });
+}
 
-    followItemsAll = items;
-    followCurrentOffset = offset;
-    followBatchSize = batchSize || 300;
-    followItems = items.slice();
+function downloadCurrentIllust() {
+    const it = ivState.items?.[ivState.idx];
+    if (!it) return;
+    const entry = { url: `https://www.pixiv.net/artworks/${it.id}` };
+    if (it._slim_illust) entry.metadata = { illust: it._slim_illust };
+    send({ cmd: "add_items", items: [entry] });
+    toast(t("toast_download_added"), "success");
+}
 
-    filterSets["follow-tag-cloud"].clear();
-    filterSets["follow-author-cloud"].clear();
+function renderIvImage() {
+    const img = document.getElementById("iv-image");
+    if (!img) return;
+    const page = ivState.pages[ivState.pageIdx];
 
-    try {
-        buildTagCloud("follow-tag-cloud", items, "applyFollowFilter", "tags");
-        buildTagCloud(
-            "follow-author-cloud",
-            items,
-            "applyFollowFilter",
-            "author",
+    if (page) {
+        img.onerror = function () {
+            if (
+                page.fallback &&
+                page.fallback !== page.primary &&
+                img.dataset.triedFallback !== "1"
+            ) {
+                img.dataset.triedFallback = "1";
+                img.src = `/proxy_image?url=${encodeURIComponent(page.fallback)}`;
+            } else {
+                img.onerror = null;
+                img.style.display = "none";
+            }
+        };
+        img.dataset.triedFallback = "0";
+        img.src = `/proxy_image?url=${encodeURIComponent(page.primary)}`;
+        img.style.display = "";
+    } else {
+        img.onerror = null;
+        img.removeAttribute("src");
+        img.style.display = "none";
+    }
+
+    const nav = document.getElementById("iv-page-nav");
+    if (!nav) return;
+    if (ivState.pages.length > 1) {
+        nav.style.display = "flex";
+        setEl(
+            "iv-page-index",
+            (el) =>
+                (el.textContent = `${ivState.pageIdx + 1} / ${ivState.pages.length}`),
         );
-        renderTable("follow-list", followItems);
-    } catch (e) {
-        console.error("follow render failed:", e);
-        const list = document.getElementById("follow-list");
-        if (list)
-            list.innerHTML = `<div class="empty-msg">Render error: ${escapeHtml(e.message)}</div>`;
+        setEl("iv-page-prev", (el) => (el.disabled = ivState.pageIdx <= 0));
+        setEl(
+            "iv-page-next",
+            (el) => (el.disabled = ivState.pageIdx >= ivState.pages.length - 1),
+        );
+    } else {
+        nav.style.display = "none";
+    }
+}
+
+// Keyboard shortcuts for viewer
+document.addEventListener("keydown", (e) => {
+    const modal = document.getElementById("illust-viewer-modal");
+    if (!modal || !modal.classList.contains("show")) return;
+
+    if (e.key === "Escape") closeIllustViewer();
+    else if (e.key === "ArrowLeft" && !e.shiftKey) illustViewerPrev();
+    else if (e.key === "ArrowRight" && !e.shiftKey) illustViewerNext();
+    else if (e.key === "ArrowLeft" && e.shiftKey) illustViewerPagePrev();
+    else if (e.key === "ArrowRight" && e.shiftKey) illustViewerPageNext();
+});
+
+document.addEventListener("click", (e) => {
+    const modal = document.getElementById("illust-viewer-modal");
+    if (modal && modal.classList.contains("show") && e.target === modal) {
+        closeIllustViewer();
+    }
+});
+
+// ============ Encyclopedia search ============
+function searchEncyclopedia() {
+    const tag = document.getElementById("search-tag")?.value.trim();
+    if (!tag) return toast(t("toast_need_tag_for_encyclopedia"), "error");
+    const url = `https://zh.moegirl.org.cn/index.php?fulltext=1&search=%22${encodeURIComponent(tag)}%22&title=Special%3A%E6%90%9C%E7%B4%A2`;
+    window.open(url, "_blank", "noopener");
+}
+
+// ============ Queue / download tab ============
+function toggleDownloadItems() {
+    dlItemsExpanded = !dlItemsExpanded;
+    setEl(
+        "dl-items-wrap",
+        (el) => (el.style.display = dlItemsExpanded ? "flex" : "none"),
+    );
+    const btn = document.getElementById("btn-toggle-items");
+    if (btn) btn.classList.toggle("expanded", dlItemsExpanded);
+    if (dlItemsExpanded) renderQueueItems();
+}
+
+function renderQueueItems() {
+    const list = document.getElementById("dl-items-list");
+    const countEl = document.getElementById("dl-items-count");
+    if (countEl) countEl.textContent = `(${queueItems.length})`;
+    if (!list) return;
+
+    if (!queueItems.length) {
+        list.innerHTML = `<div class="empty-msg" style="padding:20px">${t("no_result")}</div>`;
         return;
     }
 
-    const page = Math.floor(offset / followBatchSize) + 1;
-    followPage = page;
-    const statusEl = document.getElementById("follow-status");
-    if (statusEl) statusEl.textContent = t("status_done", items.length);
-    const pageEl = document.getElementById("follow-page-info");
-    if (pageEl) pageEl.textContent = t("page_label", page);
+    list.innerHTML = queueItems
+        .map((it) => {
+            const pid = it.pid || "—";
+            const title = it.title || "";
+            const titleHtml = title
+                ? `<a href="https://www.pixiv.net/artworks/${pid}"
+                  target="_blank" rel="noopener" class="dl-item-title"
+                  title="${escapeHtml(title)}">${escapeHtml(title)}</a>`
+                : `<span class="dl-item-title empty">—</span>`;
 
-    if (!hasMore) {
-        toast(t("toast_follow_end"), "warn");
-        if (pageEl) pageEl.textContent += " · " + t("toast_follow_end");
-    } else {
-        toast(t("toast_follow_done", items.length), "success");
-    }
-    scheduleUiStateSave();
-}
+            const status = it.status || "pending";
+            const stage = it.stage || "";
+            let statusText = t(`dl_item_status_${status}`) || status;
+            if (status === "processing" && stage) {
+                statusText = t(`dl_stage_${stage}`) || statusText;
+            }
+            const statusClass =
+                status === "processing"
+                    ? "processing"
+                    : status === "success"
+                      ? "success"
+                      : status === "failed"
+                        ? "failed"
+                        : "";
 
-function applyFollowFilter() {
-    const chipTags = [...filterSets["follow-tag-cloud"]].map((x) =>
-        x.toLowerCase(),
-    );
-    const chipAuthors = [...filterSets["follow-author-cloud"]];
-    let filtered = followItemsAll.slice();
-    if (chipTags.length > 0) {
-        filtered = filtered.filter((it) => {
-            const tagStr = (it.tags || []).join(" ").toLowerCase();
-            return chipTags.every((k) => tagStr.includes(k));
-        });
-    }
-    if (chipAuthors.length > 0) {
-        filtered = filtered.filter((it) =>
-            chipAuthors.includes(it.author || ""),
-        );
-    }
-    followItems = filtered;
-    renderTable("follow-list", followItems);
-}
+            const progress = it.progress || 0;
+            const progressClass =
+                status === "success"
+                    ? "success"
+                    : status === "failed"
+                      ? "failed"
+                      : "";
+            const errorAttr = it.error
+                ? ` class="dl-item-error" title="${escapeHtml(it.error)}"`
+                : "";
 
-function clearFollowFilter() {
-    document.getElementById("follow-filter").value = "";
-    filterSets["follow-tag-cloud"].clear();
-    filterSets["follow-author-cloud"].clear();
-    document
-        .querySelectorAll(
-            "#follow-tag-cloud .tag-chip, #follow-author-cloud .tag-chip",
-        )
-        .forEach((el) => el.classList.remove("active"));
-    applyFollowFilter();
-}
-
-function clearFollowFilter() {
-    filterSets["follow-tag-cloud"].clear();
-    filterSets["follow-author-cloud"].clear();
-    document
-        .querySelectorAll(
-            "#follow-tag-cloud .tag-chip, #follow-author-cloud .tag-chip",
-        )
-        .forEach((el) => el.classList.remove("active"));
-    applyFollowFilter();
-}
-function followNextPage() {
-    loadFollowNew(followCurrentOffset + followBatchSize);
+            return `<div class="dl-item">
+            <span class="dl-item-pid">${pid}</span>
+            ${titleHtml}
+            <span class="dl-item-status ${statusClass}"${errorAttr}>
+                ${escapeHtml(statusText)}
+            </span>
+            <div class="dl-item-progress ${progressClass}">
+                <div class="dl-item-progress-bar">
+                    <div class="dl-item-progress-fill"
+                         style="width:${Math.min(100, Math.max(0, progress))}%"></div>
+                </div>
+                <span class="dl-item-progress-text">${progress}%</span>
+            </div>
+        </div>`;
+        })
+        .join("");
 }
 
-// ============ Queue ============
-function startQueue() {
-    send({ cmd: "start_queue" });
-}
-function stopQueue() {
-    send({ cmd: "stop_queue" });
-}
-function clearQueue() {
-    if (confirm(t("toast_confirm_clear"))) send({ cmd: "clear_queue" });
-}
-
-// ============ Download controls ============
 function onPresetChange() {
     const mode = document.getElementById("dl-preset").value;
     send({ cmd: "set_download_mode", mode });
-    const threadsInput = document.getElementById("dl-threads");
-    threadsInput.disabled = mode === "normal";
-    if (mode === "normal") {
-        threadsInput.value = 1;
+    const ti = document.getElementById("dl-threads");
+    if (ti) {
+        ti.disabled = mode === "normal";
+        if (mode === "normal") ti.value = 1;
     }
 }
 
@@ -1819,134 +1980,18 @@ function onThreadsChange() {
         Math.min(8, parseInt(document.getElementById("dl-threads").value) || 1),
     );
     document.getElementById("dl-threads").value = v;
-    // Also update config
-    send({ cmd: "save_config", data: { parallel_workers: v } });
+    send({ cmd: "save_config", data: { "performance.parallel_workers": v } });
 }
 
-// ============ Config ============
-const CONFIG_KEYS = [
-    "download_dir",
-    "proxy",
-    "language",
-    "theme",
-    "performance.download_mode",
-    "performance.parallel_workers",
-    "performance.download_delay",
-    "performance.max_retries",
-    "api.request_delay",
-    "api.rate_limit_wait",
-    "api.max_results",
-    "api.parallel_requests",
-    "api.web_ajax_mode",
-    "webapi.PHPSESSID",
-];
-
-function fillConfig(cfg) {
-    CONFIG_KEYS.forEach((k) => {
-        const el = document.getElementById("cfg-" + k);
-        if (!el) return;
-        const val = getDotted(cfg, k);
-        if (val === undefined) return;
-        if (el.type === "checkbox") el.checked = !!val;
-        else el.value = val;
-    });
+function stopQueue() {
+    send({ cmd: "stop_queue" });
 }
 
-function getDotted(obj, path) {
-    return path
-        .split(".")
-        .reduce((o, k) => (o && o[k] !== undefined ? o[k] : undefined), obj);
+function clearQueue() {
+    if (confirm(t("toast_confirm_clear"))) send({ cmd: "clear_queue" });
 }
 
-let configSaveTimer = null;
-
-function saveConfig(silent = false) {
-    const data = {};
-    CONFIG_KEYS.forEach((k) => {
-        const el = document.getElementById("cfg-" + k);
-        if (!el) return;
-        const tag = el.tagName.toLowerCase();
-        const type = (el.type || "").toLowerCase();
-        if (type === "checkbox") {
-            data[k] = el.checked;
-        } else if (type === "number") {
-            data[k] = parseFloat(el.value);
-            if (isNaN(data[k])) data[k] = 0;
-        } else if (tag === "select") {
-            data[k] = el.value;
-        } else {
-            data[k] = el.value;
-        }
-    });
-
-    // Debug log for Ajax mode / Ajax 模式调试日志
-    if (data["api.web_ajax_mode"] !== undefined) {
-        console.log(
-            "[config] saving api.web_ajax_mode =",
-            data["api.web_ajax_mode"],
-        );
-    }
-
-    send({ cmd: "save_config", data });
-
-    if (data.language === "zh-CN" || data.language === "en") {
-        switchLanguage(data.language);
-    }
-    if (!silent) toast(t("toast_config_saved"), "success");
-    const statusEl = document.getElementById("config-status");
-    if (statusEl) {
-        statusEl.textContent = t("toast_config_saved");
-        setTimeout(() => {
-            statusEl.textContent = "";
-        }, 2000);
-    }
-}
-
-function scheduleConfigSave() {
-    if (configSaveTimer) clearTimeout(configSaveTimer);
-    configSaveTimer = setTimeout(() => saveConfig(true), 700);
-}
-
-function bindConfigAutoSave() {
-    CONFIG_KEYS.forEach((k) => {
-        const el = document.getElementById("cfg-" + k);
-        if (!el) {
-            console.warn("[config] missing element: cfg-" + k);
-            return;
-        }
-        const tag = el.tagName.toLowerCase();
-        const type = (el.type || "").toLowerCase();
-        if (tag === "select" || type === "checkbox") {
-            el.addEventListener("change", scheduleConfigSave);
-        } else {
-            el.addEventListener("input", scheduleConfigSave);
-            el.addEventListener("change", scheduleConfigSave);
-        }
-    });
-}
-
-function testLogin() {
-    const rt = document.getElementById("cfg-refresh_token").value.trim();
-    if (!rt) return toast(t("toast_need_token"), "error");
-    send({ cmd: "login", refresh_token: rt });
-}
-
-function testLatency() {
-    toast(t("toast_latency_testing"), "");
-    send({ cmd: "test_latency" });
-}
-
-// ============ Token help modal ============
-function showTokenHelp() {
-    document.getElementById("token-help-modal").classList.add("show");
-}
-function closeTokenHelp() {
-    document.getElementById("token-help-modal").classList.remove("show");
-}
-function toggleCloud(sectionId) {
-    const el = document.getElementById(sectionId);
-    if (el) el.classList.toggle("collapsed");
-}
+// ============ Add task modal ============
 function openAddTaskModal() {
     const modal = document.getElementById("add-task-modal");
     if (modal) modal.classList.add("show");
@@ -1956,8 +2001,7 @@ function openAddTaskModal() {
 function closeAddTaskModal() {
     const modal = document.getElementById("add-task-modal");
     if (modal) modal.classList.remove("show");
-    const preview = document.getElementById("bookmark-preview");
-    if (preview) preview.innerHTML = "";
+    setEl("bookmark-preview", (el) => (el.innerHTML = ""));
     parsedBookmarkUrls = [];
     const btn = document.getElementById("bookmark-add-btn");
     if (btn) btn.disabled = true;
@@ -1969,189 +2013,74 @@ function switchAddTaskTab(tab) {
     document
         .querySelectorAll(".add-task-pane")
         .forEach((el) => el.classList.remove("active"));
-
     if (tab === "manual" && tabs[0]) tabs[0].classList.add("active");
     else if (tab === "bookmark" && tabs[1]) tabs[1].classList.add("active");
-
     const pane = document.getElementById("add-task-" + tab);
     if (pane) pane.classList.add("active");
 }
-function onSearchModeChange() {
-    const mode = document.getElementById("search-mode").value;
-    document.getElementById("search-pane-illust").style.display =
-        mode === "illust" ? "" : "none";
-    document.getElementById("search-pane-user").style.display =
-        mode === "user" ? "" : "none";
-}
-function onDurationChange() {
-    const v = document.getElementById("search-duration").value;
-    const row = document.getElementById("search-custom-dates");
-    if (v === "custom") {
-        row.style.display = "";
-    } else {
-        row.style.display = "none";
-    }
+
+function addSingleUrl() {
+    const url = document.getElementById("manual-url").value.trim();
+    if (!url) return toast(t("toast_need_url"), "error");
+    send({ cmd: "add_items", items: [{ url }] });
+    document.getElementById("manual-url").value = "";
+    closeAddTaskModal();
 }
 
-function enqueueSelected(containerId, items) {
-    const selected = [];
-    document.querySelectorAll(`#${containerId} tr.selected`).forEach((tr) => {
-        const it = items[parseInt(tr.dataset.idx)];
-        if (it) selected.push(it);
+function addBatchUrls() {
+    const text = document.getElementById("manual-batch").value.trim();
+    if (!text) return toast(t("toast_need_urls"), "error");
+    const urls = text
+        .split("\n")
+        .map((s) => s.trim())
+        .filter((s) => s);
+    send({ cmd: "add_items", items: urls.map((u) => ({ url: u })) });
+    document.getElementById("manual-batch").value = "";
+    closeAddTaskModal();
+}
+
+function parseBookmark() {
+    const fi = document.getElementById("bookmark-file");
+    if (!fi.files.length) return toast(t("toast_select_file"), "error");
+    const reader = new FileReader();
+    reader.onload = (e) =>
+        send({ cmd: "parse_bookmark", html: e.target.result });
+    reader.readAsText(fi.files[0], "utf-8");
+}
+
+function renderBookmarkPreview(urls) {
+    parsedBookmarkUrls = urls;
+    setEl(
+        "bookmark-preview",
+        (el) =>
+            (el.innerHTML = urls
+                .map(
+                    (u) =>
+                        `<div style="padding:4px 0; border-bottom:1px solid var(--border)">${escapeHtml(u)}</div>`,
+                )
+                .join("")),
+    );
+    const btn = document.getElementById("bookmark-add-btn");
+    if (btn) btn.disabled = urls.length === 0;
+    toast(t("toast_parsed", urls.length), "success");
+}
+
+function addBookmarkUrls() {
+    if (!parsedBookmarkUrls.length) return;
+    send({
+        cmd: "add_items",
+        items: parsedBookmarkUrls.map((u) => ({ url: u })),
     });
-    if (!selected.length) return toast(t("toast_no_select"), "error");
-
-    const payload = selected.map((it) => {
-        const entry = { url: `https://www.pixiv.net/artworks/${it.id}` };
-        if (it._slim_illust) {
-            entry.metadata = { illust: it._slim_illust };
-        }
-        return entry;
-    });
-    send({ cmd: "add_items", items: payload });
-
-    document.querySelectorAll(`#${containerId} tr.selected`).forEach((tr) => {
-        tr.classList.remove("selected");
-        updateCheckboxIcon(tr);
-    });
-    lastCheckedIdx[containerId] = null;
-    updateSelectionCount();
-    toast(t("toast_selected_queued", selected.length), "success");
+    closeAddTaskModal();
 }
 
-function onFloatBallClick() {
-    const info = getSelectionInfo();
-    if (!info) return;
-    enqueueSelected(info.containerId, info.items);
-}
-// ============ Theme ============
-function applyTheme(theme) {
-    document.documentElement.setAttribute("data-theme", theme);
-    document.getElementById("theme-icon").textContent =
-        theme === "dark" ? "🌙" : "☀️";
-    localStorage.setItem("nagato_theme", theme);
-}
-
-function toggleTheme() {
-    const cur = document.documentElement.getAttribute("data-theme") || "dark";
-    const next = cur === "dark" ? "light" : "dark";
-    applyTheme(next);
-    send({ cmd: "set_theme", theme: next });
-}
-// Saving States
-let uiStateSaveTimer = null;
-
-function scheduleUiStateSave() {
-    if (uiStateSaveTimer) clearTimeout(uiStateSaveTimer);
-    uiStateSaveTimer = setTimeout(saveUiState, 500);
-}
-
-function saveUiState() {
-    const state = {
-        active_tab: getActiveTab(),
-        theme: document.documentElement.getAttribute("data-theme") || "dark",
-        ranking: {
-            mode: document.getElementById("ranking-mode")?.value,
-            items: rankingItemsAll.slice(0, 500),
-        },
-        search: {
-            mode: document.getElementById("search-mode")?.value,
-            tag: document.getElementById("search-tag")?.value,
-            sort: document.getElementById("search-sort")?.value,
-            page: document.getElementById("search-page")?.value,
-            pages: document.getElementById("search-pages")?.value,
-            target: document.getElementById("search-target")?.value,
-            duration: document.getElementById("search-duration")?.value,
-            items: searchItemsRaw.slice(0, 500),
-        },
-        recommend: {
-            items: recommendItems.slice(0, 500),
-        },
-        follow: {
-            restrict: document.getElementById("follow-restrict")?.value,
-            offset: followCurrentOffset,
-            items: followItemsAll.slice(0, 500),
-        },
-        user_detail: {
-            uid: userDetailUid,
-            user: currentUserDetail ? { ...currentUserDetail } : null,
-            items: userDetailAllItems.slice(0, 500),
-        },
-    };
-    send({ cmd: "save_ui_state", state });
-}
-
-function restoreUiState(state) {
-    if (!state) return;
-    if (state.theme) applyTheme(state.theme);
-    if (state.ranking?.mode) {
-        const el = document.getElementById("ranking-mode");
-        if (el) el.value = state.ranking.mode;
-    }
-    if (state.ranking?.items?.length) {
-        rankingItemsAll = state.ranking.items;
-        rankingItems = rankingItemsAll.slice();
-        buildTagCloud("ranking-tag-cloud", rankingItems, "filterRankingByTags");
-        renderTable("ranking-list", rankingItems);
-    }
-    if (state.search?.tag) {
-        const el = document.getElementById("search-tag");
-        if (el) el.value = state.search.tag;
-    }
-    if (state.search?.items?.length) {
-        searchItemsRaw = state.search.items;
-        searchItems = searchItemsRaw.slice();
-        renderTable("search-list", searchItems);
-    }
-    if (state.recommend?.items?.length) {
-        recommendItems = state.recommend.items;
-        renderTable("recommend-list", recommendItems);
-    }
-    if (state.follow?.items?.length) {
-        followItemsAll = state.follow.items;
-        followItems = followItemsAll.slice();
-        followCurrentOffset = state.follow.offset || 0;
-        buildTagCloud(
-            "follow-tag-cloud",
-            followItems,
-            "applyFollowFilter",
-            "tags",
-        );
-        buildTagCloud(
-            "follow-author-cloud",
-            followItems,
-            "applyFollowFilter",
-            "author",
-        );
-        renderTable("follow-list", followItems);
-    }
-    if (state.user_detail?.uid && state.user_detail?.user) {
-        userDetailUid = state.user_detail.uid;
-        currentUserDetail = state.user_detail.user;
-        renderUserHeaderOnly(currentUserDetail);
-        if (state.user_detail.items?.length) {
-            userDetailAllItems = state.user_detail.items;
-            userDetailItems = userDetailAllItems.slice();
-            buildTagCloud(
-                "udetail-tag-cloud",
-                userDetailItems,
-                "applyUserDetailFilter",
-            );
-            renderTable("user-detail-list", userDetailItems);
-        }
-    }
-    if (state.active_tab) {
-        const btn = document.querySelector(
-            `nav button[data-tab="${state.active_tab}"]`,
-        );
-        if (btn) btn.click();
-    }
-}
+// ============ Account ============
 function loadAccount(forceRefresh) {
-    const container = document.getElementById("account-header");
-    if (container) {
-        container.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_account")}</div>`;
-    }
+    setEl(
+        "account-header",
+        (el) =>
+            (el.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_account")}</div>`),
+    );
     send({ cmd: forceRefresh ? "refresh_account" : "get_account" });
     send({ cmd: "list_accounts" });
 }
@@ -2171,14 +2100,15 @@ function renderAccount(profile) {
                 onerror="this.onerror=null; this.removeAttribute('src');">`
         : '<div class="account-avatar"></div>';
 
-    // RefreshToken preview from current account / 当前账号的 Token 摘要
-    let rtPreview = "";
-    let rtFull = "";
+    let rtPreview = "",
+        rtFull = "",
+        psFull = "";
     try {
-        const idx = currentAccounts.findIndex((a) => a.is_current);
-        if (idx >= 0) {
-            rtFull = currentAccounts[idx].refresh_token || "";
-            rtPreview = currentAccounts[idx].refresh_token_preview || "";
+        const cur = currentAccounts.find((a) => a.is_current);
+        if (cur) {
+            rtFull = cur.refresh_token || "";
+            rtPreview = cur.refresh_token_preview || "";
+            psFull = cur.phpsessid || "";
         }
     } catch (e) {}
 
@@ -2191,13 +2121,33 @@ function renderAccount(profile) {
            </div>`
         : "";
 
+    const psHtml = `
+        <div class="account-phpsessid">
+            <span class="account-token-label">${t("settings_phpsessid")}</span>
+            <input type="text" id="account-phpsessid-input"
+                   value="${escapeHtml(psFull)}"
+                   data-i18n-placeholder="phpsessid_ph">
+            <button class="secondary account-token-btn"
+                    onclick="savePhpsessid()">${t("btn_save")}</button>
+        </div>`;
+
+    let commentHtml = "";
+    if (Array.isArray(profile.comment_parts) && profile.comment_parts.length) {
+        commentHtml = `<div class="account-comment">${renderCommentParts(profile.comment_parts)}</div>`;
+    } else if (profile.comment) {
+        commentHtml = `<div class="account-comment">${escapeHtml(profile.comment).replace(/\n/g, "<br>")}</div>`;
+    }
+
     container.innerHTML = `
         <div class="account-card">
             ${avatarHtml}
             <div class="account-info">
                 <div>
-                    <a class="account-name" href="https://www.pixiv.net/users/${profile.id}"
-                       target="_blank" rel="noopener">${escapeHtml(profile.name || "")}</a>
+                    <a class="account-name"
+                       href="https://www.pixiv.net/users/${profile.id}"
+                       target="_blank" rel="noopener">
+                        ${escapeHtml(profile.name || "")}
+                    </a>
                     <span class="account-account">@${escapeHtml(profile.account || "")}</span>
                 </div>
                 <div class="account-stats">
@@ -2218,57 +2168,49 @@ function renderAccount(profile) {
                         <span class="lbl">${t("account_bookmarks_short")}</span>
                     </div>
                 </div>
-                ${profile.comment ? `<div class="account-comment">${escapeHtml(profile.comment)}</div>` : ""}
+                ${commentHtml}
                 ${rtHtml}
+                ${psHtml}
             </div>
         </div>`;
 }
 
-function copyRefreshToken() {
-    try {
-        const idx = currentAccounts.findIndex((a) => a.is_current);
-        if (idx < 0) return;
-        const rt = currentAccounts[idx].refresh_token || "";
-        if (!rt) return;
-        navigator.clipboard
-            .writeText(rt)
-            .then(() => {
-                toast(t("toast_token_copied"), "success");
-            })
-            .catch(() => {
-                toast("Copy failed", "error");
-            });
-    } catch (e) {
-        toast("Copy failed", "error");
+function renderAccountList(accounts, currentIndex) {
+    const container = document.getElementById("account-list");
+    if (!container) return;
+    if (!accounts.length) {
+        container.innerHTML = `<div class="empty-msg">${t("no_result")}</div>`;
+        return;
     }
-}
-
-function loadFollowing() {
-    const panel = document.getElementById("following-panel");
-    const list = document.getElementById("following-list");
-    if (!panel || !list) return;
-    panel.style.display = "";
-    list.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_following")}</div>`;
-    send({ cmd: "load_following" });
-}
-
-function hideFollowing() {
-    const panel = document.getElementById("following-panel");
-    if (panel) panel.style.display = "none";
-}
-
-function loadBookmarks() {
-    const panel = document.getElementById("bookmarks-panel");
-    const list = document.getElementById("account-bookmarks");
-    if (!panel || !list) return;
-    panel.style.display = "";
-    list.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_bookmarks")}</div>`;
-    send({ cmd: "load_bookmarks" });
-}
-
-function hideBookmarks() {
-    const panel = document.getElementById("bookmarks-panel");
-    if (panel) panel.style.display = "none";
+    const rows = accounts
+        .map((a) => {
+            const avatarHtml = a.avatar
+                ? `<img class="account-list-avatar"
+                    src="/proxy_image?url=${encodeURIComponent(a.avatar)}"
+                    alt=""
+                    onerror="this.onerror=null; this.removeAttribute('src');">`
+                : '<div class="account-list-avatar"></div>';
+            const isCurrent = a.is_current;
+            const actions = isCurrent
+                ? `<span class="badge ai">${t("account_current")}</span>`
+                : `<button class="secondary" onclick="switchAccount(${a.index})">${t("account_switch")}</button>
+               <button class="secondary" onclick="removeAccount(${a.index})">${t("account_remove")}</button>`;
+            return `<tr class="${isCurrent ? "selected" : ""}">
+            <td style="width:44px">${avatarHtml}</td>
+            <td>${a.id || "?"}</td>
+            <td>${escapeHtml(a.name || "")}</td>
+            <td style="color:var(--text-tertiary)">${escapeHtml(a.account || "")}</td>
+            <td style="text-align:right">${actions}</td>
+        </tr>`;
+        })
+        .join("");
+    container.innerHTML = `<table>
+        <thead><tr>
+            <th></th><th>${t("th_uid")}</th><th>${t("th_name")}</th>
+            <th>${t("th_account")}</th><th style="text-align:right"></th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+    </table>`;
 }
 
 function renderFollowingList(items) {
@@ -2305,7 +2247,7 @@ function renderFollowingList(items) {
 }
 
 function renderBookmarksList(items) {
-    accountBookmarksItems = items;
+    if (currentAccountProfile) currentAccountProfile.bookmarks = items;
     const container = document.getElementById("account-bookmarks");
     if (!container) return;
     if (!items.length) {
@@ -2354,42 +2296,32 @@ function renderBookmarksList(items) {
     </table>`;
 }
 
-function renderAccountList(accounts, currentIndex) {
-    const container = document.getElementById("account-list");
-    if (!container) return;
-    if (!accounts.length) {
-        container.innerHTML = `<div class="empty-msg">${t("no_result")}</div>`;
-        return;
-    }
-    const rows = accounts
-        .map((a) => {
-            const avatarHtml = a.avatar
-                ? `<img class="account-list-avatar"
-                    src="/proxy_image?url=${encodeURIComponent(a.avatar)}"
-                    alt=""
-                    onerror="this.onerror=null; this.removeAttribute('src');">`
-                : '<div class="account-list-avatar"></div>';
-            const isCurrent = a.is_current;
-            const actions = isCurrent
-                ? `<span class="badge ai">${t("account_current")}</span>`
-                : `<button class="secondary" onclick="switchAccount(${a.index})">${t("account_switch")}</button>
-               <button class="secondary" onclick="removeAccount(${a.index})">${t("account_remove")}</button>`;
-            return `<tr class="${isCurrent ? "selected" : ""}">
-            <td style="width:44px">${avatarHtml}</td>
-            <td>${a.id || "?"}</td>
-            <td>${escapeHtml(a.name || "")}</td>
-            <td style="color:var(--text-tertiary)">${escapeHtml(a.account || "")}</td>
-            <td style="text-align:right">${actions}</td>
-        </tr>`;
-        })
-        .join("");
-    container.innerHTML = `<table>
-        <thead><tr>
-            <th></th><th>${t("th_uid")}</th><th>${t("th_name")}</th>
-            <th>${t("th_account")}</th><th style="text-align:right"></th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-    </table>`;
+function loadFollowing() {
+    const panel = document.getElementById("following-panel");
+    const list = document.getElementById("following-list");
+    if (!panel || !list) return;
+    panel.style.display = "";
+    list.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_following")}</div>`;
+    send({ cmd: "load_following" });
+}
+
+function hideFollowing() {
+    const p = document.getElementById("following-panel");
+    if (p) p.style.display = "none";
+}
+
+function loadBookmarks() {
+    const panel = document.getElementById("bookmarks-panel");
+    const list = document.getElementById("account-bookmarks");
+    if (!panel || !list) return;
+    panel.style.display = "";
+    list.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_bookmarks")}</div>`;
+    send({ cmd: "load_bookmarks" });
+}
+
+function hideBookmarks() {
+    const p = document.getElementById("bookmarks-panel");
+    if (p) p.style.display = "none";
 }
 
 function switchAccount(index) {
@@ -2401,11 +2333,30 @@ function removeAccount(index) {
     send({ cmd: "remove_account", index });
 }
 
+function copyRefreshToken() {
+    try {
+        const cur = currentAccounts.find((a) => a.is_current);
+        if (!cur || !cur.refresh_token) return;
+        navigator.clipboard
+            .writeText(cur.refresh_token)
+            .then(() => toast(t("toast_token_copied"), "success"))
+            .catch(() => toast(t("toast_clipboard_failed"), "error"));
+    } catch (e) {
+        toast(t("toast_clipboard_failed"), "error");
+    }
+}
+
+function savePhpsessid() {
+    const input = document.getElementById("account-phpsessid-input");
+    if (!input) return;
+    send({ cmd: "update_phpsessid", phpsessid: input.value.trim() });
+}
+
 function openAddAccountModal() {
     const modal = document.getElementById("add-account-modal");
     if (!modal) return;
-    const input = document.getElementById("new-account-token");
-    if (input) input.value = "";
+    setEl("new-account-token", (el) => (el.value = ""));
+    setEl("new-account-phpsessid", (el) => (el.value = ""));
     modal.classList.add("show");
 }
 
@@ -2415,492 +2366,259 @@ function closeAddAccountModal() {
 }
 
 function submitAddAccount() {
-    const input = document.getElementById("new-account-token");
-    if (!input) return;
-    const rt = input.value.trim();
+    const rtInput = document.getElementById("new-account-token");
+    const psInput = document.getElementById("new-account-phpsessid");
+    if (!rtInput) return;
+    const rt = rtInput.value.trim();
+    const ps = psInput ? psInput.value.trim() : "";
     if (!rt) return toast(t("toast_need_token"), "error");
     toast(t("account_validating"), "");
-    send({ cmd: "add_account", refresh_token: rt });
+    send({ cmd: "add_account", refresh_token: rt, phpsessid: ps });
 }
 
-function renderAccountBookmarks(items, container) {
-    if (!items.length) {
-        container.innerHTML = `<div class="empty-msg">${t("no_result")}</div>`;
-        return;
+// ============ Config ============
+const CONFIG_KEYS = [
+    "download_dir",
+    "proxy",
+    "language",
+    "theme",
+    "performance.download_mode",
+    "performance.parallel_workers",
+    "performance.download_delay",
+    "performance.max_retries",
+    "performance.enable_download_metadata_cache",
+    "api.request_delay",
+    "api.rate_limit_wait",
+    "api.max_results",
+    "api.parallel_requests",
+    "api.web_ajax_mode",
+];
+
+let configSaveTimer = null;
+
+function getDotted(obj, path) {
+    return path
+        .split(".")
+        .reduce((o, k) => (o && o[k] !== undefined ? o[k] : undefined), obj);
+}
+
+function fillConfig(cfg) {
+    CONFIG_KEYS.forEach((k) => {
+        const el = document.getElementById("cfg-" + k);
+        if (!el) return;
+        const val = getDotted(cfg, k);
+        if (val === undefined) return;
+        if (el.type === "checkbox") el.checked = !!val;
+        else el.value = val;
+    });
+
+    if (
+        cfg.language &&
+        (cfg.language === "zh-CN" || cfg.language === "en") &&
+        cfg.language !== currentLang
+    ) {
+        currentLang = cfg.language;
+        localStorage.setItem("nagato_lang", currentLang);
+        applyI18n();
+        renderTokenHelp();
     }
-    const rows = items
-        .map((it, idx) => {
-            let badges = "";
-            if (it.is_new) badges += '<span class="badge new">NEW</span>';
-            if (it.ai_generated) badges += '<span class="badge ai">AI</span>';
-            if (it.restriction) {
-                const cls = it.restriction.toLowerCase().replace("-", "");
-                badges += `<span class="badge ${cls}">${it.restriction}</span>`;
-            }
-            const titleHtml = `<a href="https://www.pixiv.net/artworks/${it.id}"
-            target="_blank" rel="noopener"
-            style="color:var(--accent); text-decoration:none;">${escapeHtml(truncate(it.title, 40))}</a>${badges}`;
-            const tagsHtml = (it.tags || [])
-                .slice(0, 5)
-                .map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`)
-                .join("");
-            return `<tr>
-            <td>${it.id}</td>
-            <td>${titleHtml}</td>
-            <td>${it.page_count || 1}</td>
-            <td>${escapeHtml(it.author)}</td>
-            <td style="text-align:right">${formatNum(it.bookmarks)}</td>
-            <td>${tagsHtml}</td>
-        </tr>`;
-        })
-        .join("");
-    container.innerHTML = `<table>
-        <thead><tr>
-            <th>${t("th_pid")}</th><th>${t("th_title")}</th>
-            <th>${t("th_pages")}</th><th>${t("th_author")}</th>
-            <th style="text-align:right">${t("th_bookmarks")}</th>
-            <th>${t("th_tags")}</th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-    </table>`;
+    if (cfg.theme) applyTheme(cfg.theme);
 }
-// ============ Tag click → search ============
-function onTagClick(evt, el) {
-    if (evt) evt.stopPropagation();
-    let tag = el.dataset.tag || "";
-    // Extract name only, drop translated part / 仅提取主标签名
-    const m = tag.match(/^([^(]+?)(?:\(.+\))?$/);
-    if (m) tag = m[1].trim();
-    if (!tag) return;
 
-    // Switch to search tab / 切换到搜索标签页
-    const navBtn = document.querySelector('nav button[data-tab="search"]');
-    if (navBtn) navBtn.click();
+function scheduleConfigSave() {
+    if (configSaveTimer) clearTimeout(configSaveTimer);
+    configSaveTimer = setTimeout(() => saveConfig(true), 700);
+}
 
-    // Fill search form / 填入搜索表单
-    const tagInput = document.getElementById("search-tag");
-    if (tagInput) tagInput.value = tag;
+function saveConfig(silent = false) {
+    const data = {};
+    CONFIG_KEYS.forEach((k) => {
+        const el = document.getElementById("cfg-" + k);
+        if (!el) return;
+        if (el.type === "checkbox") data[k] = el.checked;
+        else if (el.type === "number") {
+            const v = parseFloat(el.value);
+            data[k] = isNaN(v) ? 0 : v;
+        } else data[k] = el.value;
+    });
+    send({ cmd: "save_config", data });
 
-    const targetSel = document.getElementById("search-target");
-    if (targetSel) targetSel.value = "exact_match_for_tags";
-
-    // Ensure search mode is "illust" / 确保搜索模式为"作品"
-    const modeSel = document.getElementById("search-mode");
-    if (modeSel && modeSel.value !== "illust") {
-        modeSel.value = "illust";
-        onSearchModeChange();
+    if (data.language === "zh-CN" || data.language === "en") {
+        switchLanguage(data.language);
     }
-
-    // Close viewer modal if open / 关闭查看模态框（若已打开）
-    const modal = document.getElementById("illust-viewer-modal");
-    if (modal && modal.classList.contains("show")) {
-        closeIllustViewer();
-    }
-
-    // Trigger search / 触发搜索
-    setTimeout(() => doSearch(), 30);
-}
-// ============ Illust Viewer ============
-// Convert original → master1200 jpg / 原图转 master1200（强制 jpg）
-function originalToLarge(url) {
-    if (!url) return "";
-    const m = url.match(
-        /^(https?:\/\/i\.pximg\.net)\/img-original\/(.+?)\.[a-zA-Z]+$/,
-    );
-    if (!m) return url;
-    const [, host, path] = m;
-    // master1200 is jpg even when original is png / master1200 即使是 png 原图也是 jpg
-    return `${host}/c/600x1200_90_webp/img-master/${path}_master1200.jpg`;
+    if (!silent) toast(t("toast_config_saved"), "success");
 }
 
-// Returns array of { primary, fallback } / 返回 { primary, fallback } 数组
-function getIllustPages(slim) {
-    const pages = [];
-    if (!slim) return pages;
-
-    const pageCount = slim.page_count || 1;
-    const metaPages = slim.meta_pages || [];
-    const single = slim.meta_single_page || {};
-
-    if (pageCount === 1 || metaPages.length === 0) {
-        // Single page: convert original → master1200, original as fallback
-        const orig = single.original_image_url;
-        if (orig) {
-            pages.push({
-                primary: originalToLarge(orig),
-                fallback: orig,
-            });
+function bindConfigAutoSave() {
+    CONFIG_KEYS.forEach((k) => {
+        const el = document.getElementById("cfg-" + k);
+        if (!el) return;
+        const tag = el.tagName.toLowerCase();
+        const type = (el.type || "").toLowerCase();
+        if (tag === "select" || type === "checkbox") {
+            el.addEventListener("change", scheduleConfigSave);
+        } else {
+            el.addEventListener("input", scheduleConfigSave);
+            el.addEventListener("change", scheduleConfigSave);
         }
-    } else {
-        // Multi page: meta_pages already provides large URLs / 多页直接用 large
-        for (const p of metaPages) {
-            const im = p.image_urls || {};
-            const primary = im.large || im.medium || im.square_medium;
-            const fallback = im.original || primary;
-            if (primary) {
-                pages.push({ primary, fallback });
-            }
+    });
+}
+
+// ============ Test / latency / token help ============
+function testLogin() {
+    send({ cmd: "login" });
+}
+
+function testLatency() {
+    toast(t("toast_latency_testing"), "");
+    send({ cmd: "test_latency" });
+}
+
+function showTokenHelp() {
+    document.getElementById("token-help-modal").classList.add("show");
+}
+
+function closeTokenHelp() {
+    document.getElementById("token-help-modal").classList.remove("show");
+}
+
+// ============ UI state ============
+let uiStateSaveTimer = null;
+
+function scheduleUiStateSave() {
+    if (uiStateSaveTimer) clearTimeout(uiStateSaveTimer);
+    uiStateSaveTimer = setTimeout(saveUiState, 500);
+}
+
+function saveUiState() {
+    const state = {
+        active_tab: getActiveTab(),
+        theme: document.documentElement.getAttribute("data-theme") || "dark",
+        ranking: {
+            mode: document.getElementById("ranking-mode")?.value,
+            items: rankingItemsAll.slice(0, 500),
+        },
+        search: {
+            mode: document.getElementById("search-mode")?.value,
+            tag: document.getElementById("search-tag")?.value,
+            sort: document.getElementById("search-sort")?.value,
+            page: document.getElementById("search-page")?.value,
+            pages: document.getElementById("search-pages")?.value,
+            target: document.getElementById("search-target")?.value,
+            duration: document.getElementById("search-duration")?.value,
+            items: searchItemsRaw.slice(0, 500),
+        },
+        recommend: { items: recommendItems.slice(0, 500) },
+        follow: {
+            restrict: document.getElementById("follow-restrict")?.value,
+            offset: followCurrentOffset,
+            items: followItemsAll.slice(0, 500),
+        },
+        user_detail: {
+            uid: userDetailUid,
+            user: currentUserDetail ? { ...currentUserDetail } : null,
+            items: userDetailAllItems.slice(0, 500),
+        },
+    };
+    send({ cmd: "save_ui_state", state });
+}
+
+function restoreUiState(state) {
+    if (!state) return;
+    if (state.theme) applyTheme(state.theme);
+
+    if (state.ranking?.mode) {
+        setEl("ranking-mode", (el) => (el.value = state.ranking.mode));
+    }
+    if (state.ranking?.items?.length) {
+        rankingItemsAll = state.ranking.items;
+        rankingItems = rankingItemsAll.slice();
+        buildTagCloud("ranking-tag-cloud", rankingItems, "filterRankingByTags");
+        renderTable("ranking-list", rankingItems);
+    }
+
+    if (state.search?.tag)
+        setEl("search-tag", (el) => (el.value = state.search.tag));
+    if (state.search?.items?.length) {
+        searchItemsRaw = state.search.items;
+        searchItems = searchItemsRaw.slice();
+        renderTable("search-list", searchItems);
+    }
+
+    if (state.recommend?.items?.length) {
+        recommendItems = state.recommend.items;
+        renderTable("recommend-list", recommendItems);
+    }
+
+    if (state.follow?.items?.length) {
+        followItemsAll = state.follow.items;
+        followItems = followItemsAll.slice();
+        followCurrentOffset = state.follow.offset || 0;
+        buildTagCloud(
+            "follow-tag-cloud",
+            followItems,
+            "applyFollowFilter",
+            "tags",
+        );
+        buildTagCloud(
+            "follow-author-cloud",
+            followItems,
+            "applyFollowFilter",
+            "author",
+        );
+        renderTable("follow-list", followItems);
+    }
+
+    if (state.user_detail?.uid && state.user_detail?.user) {
+        userDetailUid = state.user_detail.uid;
+        currentUserDetail = state.user_detail.user;
+        renderUserHeaderOnly(currentUserDetail);
+        if (state.user_detail.items?.length) {
+            userDetailAllItems = state.user_detail.items;
+            userDetailItems = userDetailAllItems.slice();
+            buildTagCloud(
+                "udetail-tag-cloud",
+                userDetailItems,
+                "applyUserDetailFilter",
+            );
+            renderTable("user-detail-list", userDetailItems);
         }
     }
-    return pages;
-}
 
-function openIllustViewer(containerId, idx) {
-    const getter = tableItemGetters[containerId];
-    if (!getter) return;
-    const items = getter();
-    const it = items[idx];
-    if (!it) return;
-
-    ivState.containerId = containerId;
-    ivState.items = items;
-    ivState.idx = idx;
-
-    renderIllustViewer();
-    document.getElementById("illust-viewer-modal").classList.add("show");
-}
-
-function closeIllustViewer() {
-    document.getElementById("illust-viewer-modal").classList.remove("show");
-    const img = document.getElementById("iv-image");
-    if (img) img.src = "";
-}
-
-function illustViewerPrev() {
-    if (ivState.idx > 0) {
-        ivState.idx--;
-        renderIllustViewer();
+    if (state.active_tab) {
+        const btn = document.querySelector(
+            `nav button[data-tab="${state.active_tab}"]`,
+        );
+        if (btn) btn.click();
     }
 }
 
-function illustViewerNext() {
-    if (ivState.idx < ivState.items.length - 1) {
-        ivState.idx++;
-        renderIllustViewer();
-    }
+// ============ Utilities ============
+function formatNum(n) {
+    return (n || 0).toLocaleString();
 }
-
-function illustViewerPagePrev() {
-    if (ivState.pageIdx > 0) {
-        ivState.pageIdx--;
-        renderIvImage();
-    }
+function truncate(s, n) {
+    return !s ? "" : s.length > n ? s.slice(0, n) + "..." : s;
 }
-
-function illustViewerPageNext() {
-    if (ivState.pageIdx < ivState.pages.length - 1) {
-        ivState.pageIdx++;
-        renderIvImage();
-    }
-}
-
-function renderIllustViewer() {
-    const it = ivState.items[ivState.idx];
-    if (!it) return;
-    const slim = it._slim_illust || {};
-    const user = slim.user || {};
-
-    // Navigation / 切换控件
-    document.getElementById("iv-index").textContent =
-        `${ivState.idx + 1} / ${ivState.items.length}`;
-    document.getElementById("iv-prev").disabled = ivState.idx <= 0;
-    document.getElementById("iv-next").disabled =
-        ivState.idx >= ivState.items.length - 1;
-
-    // Image / 图像
-    ivState.pages = getIllustPages(slim);
-    ivState.pageIdx = 0;
-    renderIvImage();
-
-    // Title / 标题
-    const titleEl = document.getElementById("iv-title");
-    titleEl.textContent = it.title || "";
-    titleEl.href = `https://www.pixiv.net/artworks/${it.id}`;
-    titleEl.title = t("iv_open_pixiv");
-
-    // Badges / 徽章
-    let badges = "";
-    if (it.is_new) badges += '<span class="badge new">NEW</span>';
-    if (it.ai_generated) badges += '<span class="badge ai">AI</span>';
-    if (it.restriction) {
-        const cls = it.restriction.toLowerCase().replace("-", "");
-        badges += `<span class="badge ${cls}">${it.restriction}</span>`;
-    }
-    document.getElementById("iv-badges").innerHTML = badges;
-
-    // Stats / 统计
-    document.getElementById("iv-views").textContent = formatNum(it.views);
-    document.getElementById("iv-bookmarks").textContent = formatNum(
-        it.bookmarks,
+function escapeHtml(s) {
+    if (!s) return "";
+    return String(s).replace(
+        /[&<>"']/g,
+        (c) =>
+            ({
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#39;",
+            })[c],
     );
-    document.getElementById("iv-pages").textContent = it.page_count || 1;
-    document.getElementById("iv-date").textContent = it.date || "—";
-
-    // Tags / 标签
-    const tagsHtml = (it.tags || [])
-        .map(
-            (tag) =>
-                `<span class="tag tag-clickable" data-tag="${escapeHtml(tag)}"
-               onclick="onTagClick(event, this)"
-               title="${t("tag_search_title")}">${escapeHtml(tag)}</span>`,
-        )
-        .join("");
-    document.getElementById("iv-tags").innerHTML = tagsHtml;
-
-    // User card / 用户卡片
-    renderIvUser(user, it);
-    renderIvActions(it);
 }
 
-function renderIvUser(user, it) {
-    const container = document.getElementById("iv-user-card");
-    if (!container) return;
-
-    // Fallback chain / 回退链
-    const uid = user.id || it.author_id;
-    const name = user.name || it.author || "";
-    const account = user.account || it.author_account || "";
-    const avatar =
-        (user.profile_image_urls && user.profile_image_urls.medium) ||
-        it.author_avatar ||
-        "";
-
-    // Simple onerror: clear src; container CSS shows gray circle / 最简 onerror
-    const avatarHtml = avatar
-        ? `<img class="iv-user-avatar"
-                src="/proxy_image?url=${encodeURIComponent(avatar)}"
-                alt=""
-                onerror="this.onerror=null; this.removeAttribute('src');">`
-        : '<div class="iv-user-avatar"></div>';
-
-    const nameHtml = uid
-        ? `<a class="iv-user-name" href="#"
-               data-action="open-user"
-               data-uid="${uid}"
-               title="${t("th_author_link")}">${escapeHtml(name)}</a>`
-        : `<span class="iv-user-name">${escapeHtml(name)}</span>`;
-
-    const accountHtml = account
-        ? `<div class="iv-user-account">@${escapeHtml(account)}</div>`
-        : "";
-
-    container.innerHTML = `
-        ${avatarHtml}
-        <div class="iv-user-info">
-            ${nameHtml}
-            ${accountHtml}
-        </div>`;
-}
-function renderIvActions(it) {
-    const btn = document.getElementById("iv-bookmark-btn");
-    const label = document.getElementById("iv-bookmark-label");
-    if (!btn || !label) return;
-
-    const marked = !!it.is_bookmarked;
-    btn.classList.toggle("active", marked);
-    label.textContent = marked
-        ? t("btn_pixiv_bookmarked")
-        : t("btn_pixiv_bookmark");
-}
-
-function toggleIllustBookmark() {
-    const it = ivState.items?.[ivState.idx];
-    if (!it) return;
-    const action = it.is_bookmarked ? "delete" : "add";
-    send({ cmd: "bookmark_toggle", id: it.id, action });
-}
-
-function downloadCurrentIllust() {
-    const it = ivState.items?.[ivState.idx];
-    if (!it) return;
-
-    const entry = { url: `https://www.pixiv.net/artworks/${it.id}` };
-    if (it._slim_illust) {
-        entry.metadata = { illust: it._slim_illust };
-    }
-    send({ cmd: "add_items", items: [entry] });
-    toast(t("toast_download_added"), "success");
-}
-
-function renderIvImage() {
-    const img = document.getElementById("iv-image");
-    if (!img) return;
-
-    const page = ivState.pages[ivState.pageIdx];
-
-    if (page) {
-        // Chain: primary → fallback → hide / 链式：主 → 备 → 隐藏
-        img.onerror = function () {
-            if (
-                page.fallback &&
-                page.fallback !== page.primary &&
-                img.dataset.triedFallback !== "1"
-            ) {
-                img.dataset.triedFallback = "1";
-                img.src = `/proxy_image?url=${encodeURIComponent(page.fallback)}`;
-            } else {
-                img.onerror = null;
-                img.style.display = "none";
-            }
-        };
-        img.dataset.triedFallback = "0";
-        img.src = `/proxy_image?url=${encodeURIComponent(page.primary)}`;
-        img.style.display = "";
-    } else {
-        img.onerror = null;
-        img.removeAttribute("src");
-        img.style.display = "none";
-    }
-
-    // Page navigation / 分页导航
-    const nav = document.getElementById("iv-page-nav");
-    if (!nav) return;
-    if (ivState.pages.length > 1) {
-        nav.style.display = "flex";
-        const idxEl = document.getElementById("iv-page-index");
-        if (idxEl)
-            idxEl.textContent = `${ivState.pageIdx + 1} / ${ivState.pages.length}`;
-        const prevBtn = document.getElementById("iv-page-prev");
-        const nextBtn = document.getElementById("iv-page-next");
-        if (prevBtn) prevBtn.disabled = ivState.pageIdx <= 0;
-        if (nextBtn)
-            nextBtn.disabled = ivState.pageIdx >= ivState.pages.length - 1;
-    } else {
-        nav.style.display = "none";
-    }
-}
-
-// Keyboard shortcuts / 键盘快捷键
-document.addEventListener("keydown", (e) => {
-    const modal = document.getElementById("illust-viewer-modal");
-    if (!modal || !modal.classList.contains("show")) return;
-
-    if (e.key === "Escape") {
-        closeIllustViewer();
-    } else if (e.key === "ArrowLeft" && !e.shiftKey) {
-        illustViewerPrev();
-    } else if (e.key === "ArrowRight" && !e.shiftKey) {
-        illustViewerNext();
-    } else if (e.key === "ArrowLeft" && e.shiftKey) {
-        illustViewerPagePrev();
-    } else if (e.key === "ArrowRight" && e.shiftKey) {
-        illustViewerPageNext();
-    }
-});
-
-// ============ Download items list ============
-let queueItems = [];
-let dlItemsExpanded = false;
-
-function toggleDownloadItems() {
-    dlItemsExpanded = !dlItemsExpanded;
-    const wrap = document.getElementById("dl-items-wrap");
-    const icon = document.getElementById("dl-items-expand-icon");
-    if (wrap) wrap.style.display = dlItemsExpanded ? "flex" : "none";
-    if (icon) icon.style.transform = dlItemsExpanded ? "" : "rotate(-90deg)";
-    if (dlItemsExpanded) renderQueueItems();
-}
-
-function renderQueueItems() {
-    const list = document.getElementById("dl-items-list");
-    const countEl = document.getElementById("dl-items-count");
-    if (countEl) countEl.textContent = `(${queueItems.length})`;
-    if (!list) return;
-
-    if (!queueItems.length) {
-        list.innerHTML = `<div class="empty-msg" style="padding:20px">${t("no_result")}</div>`;
-        return;
-    }
-
-    const rows = queueItems
-        .map((it) => {
-            const pid = it.pid || "—";
-            const title = it.title || "";
-            const titleHtml = title
-                ? `<a href="https://www.pixiv.net/artworks/${pid}"
-                  target="_blank" rel="noopener"
-                  class="dl-item-title"
-                  title="${escapeHtml(title)}">${escapeHtml(title)}</a>`
-                : `<span class="dl-item-title empty">—</span>`;
-
-            const status = it.status || "pending";
-            const stage = it.stage || "";
-            let statusText = t(`dl_item_status_${status}`) || status;
-            if (status === "processing" && stage) {
-                statusText = t(`dl_stage_${stage}`) || statusText;
-            }
-            const statusClass =
-                status === "processing"
-                    ? "processing"
-                    : status === "success"
-                      ? "success"
-                      : status === "failed"
-                        ? "failed"
-                        : "";
-
-            const progress = it.progress || 0;
-            const progressClass =
-                status === "success"
-                    ? "success"
-                    : status === "failed"
-                      ? "failed"
-                      : "";
-            const errorAttr = it.error
-                ? ` class="dl-item-error" title="${escapeHtml(it.error)}"`
-                : "";
-
-            return `<div class="dl-item">
-            <span class="dl-item-pid">${pid}</span>
-            ${titleHtml}
-            <span class="dl-item-status ${statusClass}"${errorAttr}>
-                ${escapeHtml(statusText)}
-            </span>
-            <div class="dl-item-progress ${progressClass}">
-                <div class="dl-item-progress-bar">
-                    <div class="dl-item-progress-fill"
-                         style="width:${Math.min(100, Math.max(0, progress))}%"></div>
-                </div>
-                <span class="dl-item-progress-text">${progress}%</span>
-            </div>
-        </div>`;
-        })
-        .join("");
-
-    list.innerHTML = rows;
-}
-
-// Boot
+// ============ Boot ============
 currentLang = detectLang();
-const savedTheme = localStorage.getItem("nagato_theme") || "dark";
-applyTheme(savedTheme);
+applyTheme(localStorage.getItem("nagato_theme") || "dark");
 applyI18n();
 renderTokenHelp();
 connect();
 bindConfigAutoSave();
-
-document.querySelectorAll("nav button").forEach((btn) => {
-    btn.onclick = () => {
-        document
-            .querySelectorAll("nav button")
-            .forEach((b) => b.classList.remove("active"));
-        document
-            .querySelectorAll(".tab")
-            .forEach((t) => t.classList.remove("active"));
-        btn.classList.add("active");
-        document
-            .getElementById("tab-" + btn.dataset.tab)
-            .classList.add("active");
-
-        // Apply user background visibility / 应用用户背景图可见性
-        applyUserBgVisibility();
-
-        updateSelectionCount();
-        scheduleUiStateSave();
-    };
-});
-document.addEventListener("click", (e) => {
-    const modal = document.getElementById("illust-viewer-modal");
-    if (modal && modal.classList.contains("show") && e.target === modal) {
-        closeIllustViewer();
-    }
-});
