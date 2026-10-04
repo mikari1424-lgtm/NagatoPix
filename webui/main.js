@@ -8,11 +8,14 @@ const filterSets = {
     "follow-tag-cloud": new Set(),
     "follow-author-cloud": new Set(),
     "search-tag-all-cloud": new Set(),
+    "recommend-tag-cloud": new Set(),
 };
+let hasRestoredUiState = false;
 
 let parsedBookmarkUrls = [];
 let rankingItems = [],
     rankingItemsAll = [];
+let recommendItemsAll = [];
 let searchIllustItems = [],
     searchIllustItemsRaw = [];
 let searchNovelItems = [],
@@ -86,6 +89,13 @@ let ws = null;
 let reconnectTimer = null;
 
 function connect() {
+    if (
+        ws &&
+        (ws.readyState === WebSocket.OPEN ||
+            ws.readyState === WebSocket.CONNECTING)
+    ) {
+        return;
+    }
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     ws = new WebSocket(proto + "//" + location.host + "/ws");
     ws.onopen = () => {
@@ -1290,6 +1300,19 @@ function onHotTagClick(evt, el) {
     doSearchFromTopbar();
 }
 
+function toggleTagCloud(cloudId, btn) {
+    const wrap = document.getElementById(cloudId + "-wrap");
+    if (!wrap) return;
+    const isOpen = wrap.style.display !== "none";
+    if (isOpen) {
+        wrap.style.display = "none";
+        if (btn) btn.classList.remove("expanded");
+    } else {
+        wrap.style.display = "";
+        if (btn) btn.classList.add("expanded");
+    }
+}
+
 function toggleSearchTagCloud(which, btn) {
     const hotWrap = document.getElementById("search-tag-hot-wrap");
     const allWrap = document.getElementById("search-tag-all-wrap");
@@ -1600,6 +1623,7 @@ function tagChipClick(el, cloudId, callbackName) {
     if (callbackName === "filterRankingByTags") filterRankingByTags();
     else if (callbackName === "applyUserDetailFilter") applyUserDetailFilter();
     else if (callbackName === "applyFollowFilter") applyFollowFilter();
+    else if (callbackName === "applyRecommendFilter") applyRecommendFilter();
 }
 
 function toggleCloud(sectionId) {
@@ -1722,8 +1746,17 @@ function doRecommend(mode) {
 }
 
 function renderRecommendResults(items, mode) {
-    recommendItems = items;
-    renderTable("recommend-list", items);
+    recommendItemsAll = items || [];
+    recommendItems = recommendItemsAll.slice();
+    if (filterSets["recommend-tag-cloud"]) {
+        filterSets["recommend-tag-cloud"].clear();
+    }
+    renderTable("recommend-list", recommendItems);
+    buildTagCloud(
+        "recommend-tag-cloud",
+        recommendItemsAll,
+        "applyRecommendFilter",
+    );
     document.getElementById("btn-rec-auto").disabled = false;
     setEl(
         "recommend-status",
@@ -1732,6 +1765,21 @@ function renderRecommendResults(items, mode) {
     );
     toast(t("toast_recommend_done", items.length), "success");
     scheduleUiStateSave();
+}
+
+function applyRecommendFilter() {
+    const chipTags = [...(filterSets["recommend-tag-cloud"] || [])].map((x) =>
+        x.toLowerCase(),
+    );
+    if (chipTags.length === 0) {
+        recommendItems = recommendItemsAll.slice();
+    } else {
+        recommendItems = recommendItemsAll.filter((it) => {
+            const s = (it.tags || []).join(" ").toLowerCase();
+            return chipTags.every((k) => s.includes(k));
+        });
+    }
+    renderTable("recommend-list", recommendItems);
 }
 
 function openAdvancedRecommend() {
@@ -1934,7 +1982,7 @@ function renderUserHeaderOnly(user) {
 }
 
 function applyUserBgVisibility() {
-    const activeTab = document.querySelector("nav button.active")?.dataset.tab;
+    const activeTab = getActiveTab();
     const hasBg = !!(
         currentUserDetail && currentUserDetail.background_image_url
     );
@@ -2012,6 +2060,89 @@ function renderCommentParts(parts) {
             return "";
         })
         .join("");
+}
+
+function toggleShareMenu(ev) {
+    if (ev) ev.stopPropagation();
+    const menu = document.getElementById("share-menu");
+    if (!menu) return;
+    const isOpen = menu.style.display !== "none" && menu.style.display !== "";
+    menu.style.display = isOpen ? "none" : "";
+}
+
+document.addEventListener("click", (e) => {
+    const menu = document.getElementById("share-menu");
+    if (!menu) return;
+    if (menu.style.display === "none" || !menu.style.display) return;
+    if (
+        !e.target.closest("#share-menu") &&
+        !e.target.closest("#iv-share-btn")
+    ) {
+        menu.style.display = "none";
+    }
+});
+
+function closeShareMenu() {
+    const menu = document.getElementById("share-menu");
+    if (menu) menu.style.display = "none";
+}
+
+function copyToClipboard(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard.writeText(text);
+    }
+    return new Promise((resolve, reject) => {
+        try {
+            const ta = document.createElement("textarea");
+            ta.value = text;
+            ta.style.position = "fixed";
+            ta.style.opacity = "0";
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand("copy");
+            document.body.removeChild(ta);
+            resolve();
+        } catch (e) {
+            reject(e);
+        }
+    });
+}
+
+function getCurrentIllustItem() {
+    return ivState.items?.[ivState.idx] || null;
+}
+
+function copyIllustId() {
+    const it = getCurrentIllustItem();
+    if (!it) return;
+    copyToClipboard(String(it.id))
+        .then(() => toast(t("toast_share_copied"), "success"))
+        .catch(() => toast(t("toast_clipboard_failed"), "error"));
+    closeShareMenu();
+}
+
+function copyIllustUrl() {
+    const it = getCurrentIllustItem();
+    if (!it) return;
+    copyToClipboard(`https://www.pixiv.net/artworks/${it.id}`)
+        .then(() => toast(t("toast_share_copied"), "success"))
+        .catch(() => toast(t("toast_clipboard_failed"), "error"));
+    closeShareMenu();
+}
+
+function copyIllustDetail() {
+    const it = getCurrentIllustItem();
+    if (!it) return;
+    const lines = [
+        `${t("share_detail_title")}: ${it.title || ""}`,
+        `${t("share_detail_author")}: ${it.author || ""}`,
+        `${t("share_detail_date")}: ${it.date || ""}`,
+        `${t("share_detail_url")}: https://www.pixiv.net/artworks/${it.id}`,
+    ];
+    copyToClipboard(lines.join("\n"))
+        .then(() => toast(t("toast_share_copied"), "success"))
+        .catch(() => toast(t("toast_clipboard_failed"), "error"));
+    closeShareMenu();
 }
 
 // ============ Illust viewer ============
@@ -2146,6 +2277,7 @@ function renderIllustViewer() {
 
     renderIvUser(user, it);
     renderIvActions(it);
+    closeShareMenu();
 }
 
 function openNovelViewer(nid) {
@@ -2915,8 +3047,8 @@ function fillConfig(cfg) {
         renderTokenHelp();
     }
     if (cfg.ugoira_format) {
-            setEl("dl-ugoira-format", (el) => (el.value = cfg.ugoira_format));
-        }
+        setEl("dl-ugoira-format", (el) => (el.value = cfg.ugoira_format));
+    }
     if (cfg.theme) applyTheme(cfg.theme);
 }
 
@@ -2943,6 +3075,22 @@ function saveConfig(silent = false) {
     }
     if (!silent) toast(t("toast_config_saved"), "success");
 }
+
+document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    // 回到前台：如果连接不是 OPEN，立刻重连（不等 2 秒退避）
+    if (
+        !ws ||
+        ws.readyState === WebSocket.CLOSED ||
+        ws.readyState === WebSocket.CLOSING
+    ) {
+        if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+        }
+        connect();
+    }
+});
 
 function bindConfigAutoSave() {
     CONFIG_KEYS.forEach((k) => {
@@ -3053,8 +3201,14 @@ function restoreUiState(state) {
     }
 
     if (state.recommend?.items?.length) {
-        recommendItems = state.recommend.items;
+        recommendItemsAll = state.recommend.items;
+        recommendItems = recommendItemsAll.slice();
         renderTable("recommend-list", recommendItems);
+        buildTagCloud(
+            "recommend-tag-cloud",
+            recommendItemsAll,
+            "applyRecommendFilter",
+        );
     }
 
     if (state.follow?.items?.length) {

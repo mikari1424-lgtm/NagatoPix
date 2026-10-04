@@ -351,9 +351,7 @@ const I18N = {
         type_ugoira: "动图",
         settings_web_ajax_mode: "Ajax 模式:",
         ajax_mode_disabled: "不使用",
-        ajax_mode_illust: "仅作品详情",
-        ajax_mode_illust_user: "作品详情 + 用户详情",
-        ajax_mode_global: "全局使用",
+        ajax_mode_auto: "自动启用",
         web_ajax_mode_hint:
             "Web Ajax 用于补全含 URL 的 caption 与用户备注。等级越高覆盖越广，但请求量也越大。需要 PHPSESSID。",
         account_refresh_token: "RefreshToken",
@@ -381,6 +379,15 @@ const I18N = {
         ugoira_apng: "APNG (.apng)",
         ugoira_webp: "WebP (.webp)",
         search_no_novel: "本次搜索未返回小说（请在搜索设置中勾选「小说」）",
+        btn_share: "分享",
+        share_copy_id: "复制作品 ID",
+        share_copy_url: "复制作品链接",
+        share_copy_detail: "复制作品详细信息",
+        share_detail_title: "作品标题",
+        share_detail_author: "作者",
+        share_detail_date: "发布时间",
+        share_detail_url: "作品链接",
+        toast_share_copied: "已复制到剪贴板",
     },
     en: {
         connecting: "Connecting...",
@@ -731,9 +738,7 @@ const I18N = {
         type_ugoira: "Ugoira",
         settings_web_ajax_mode: "Ajax Mode:",
         ajax_mode_disabled: "Disabled",
-        ajax_mode_illust: "Illust Detail Only",
-        ajax_mode_illust_user: "Illust + User Detail",
-        ajax_mode_global: "Global",
+        ajax_mode_auto: "Auto",
         web_ajax_mode_hint:
             "Web Ajax recovers full captions and user comments. Higher tiers cover more but issue more requests. Requires PHPSESSID.",
         account_refresh_token: "RefreshToken",
@@ -763,6 +768,15 @@ const I18N = {
         ugoira_webp: "WebP (.webp)",
         search_no_novel:
             'No novels in this search (enable "Novel" in search settings)',
+        btn_share: "Share",
+        share_copy_id: "Copy ID",
+        share_copy_url: "Copy URL",
+        share_copy_detail: "Copy details",
+        share_detail_title: "Title",
+        share_detail_author: "Author",
+        share_detail_date: "Date",
+        share_detail_url: "URL",
+        toast_share_copied: "Copied to clipboard",
     },
 };
 

@@ -213,13 +213,13 @@ def get_language() -> str:
         return _current_lang
 
 
-def t(key: str, **kwargs) -> str:
+def t(key_name: str, **kwargs) -> str:
     with _lock:
         lang = _current_lang
     table = LOG_STRINGS.get(lang, LOG_STRINGS['en'])
-    s = table.get(key)
+    s = table.get(key_name)
     if s is None:
-        s = LOG_STRINGS['en'].get(key, key)
+        s = LOG_STRINGS['en'].get(key_name, key_name)
     if kwargs:
         try:
             s = s.format(**kwargs)
@@ -228,8 +228,8 @@ def t(key: str, **kwargs) -> str:
     return s
 
 
-def meta(key: str) -> str:
+def meta(key_name: str) -> str:
     with _lock:
         lang = _current_lang
     table = META_STRINGS.get(lang, META_STRINGS['en'])
-    return table.get(key, key)
+    return table.get(key_name, key_name)

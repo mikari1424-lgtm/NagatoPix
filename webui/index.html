@@ -99,6 +99,15 @@
                     <button class="secondary" onclick="doRecommend('work')" data-i18n="rec_similar"></button>
                     <button class="secondary" onclick="openAdvancedRecommend()" data-i18n="rec_advanced"></button>
                 </div>
+                <div class="cloud-toggles">
+                    <button class="cloud-toggle-btn" type="button" onclick="toggleTagCloud('recommend-tags', this)">
+                        <img class="expand-arrow" src="/ui_icons/expand.svg" alt="">
+                        <span data-i18n="label_tag_cloud"></span>
+                    </button>
+                </div>
+                <div class="tag-cloud-wrap" id="recommend-tags-wrap" style="display:none">
+                    <div class="tag-cloud" id="recommend-tag-cloud"></div>
+                </div>
             </div>
             <div class="panel results-panel">
                 <div id="recommend-list"></div>
@@ -123,22 +132,20 @@
                     <button class="secondary" onclick="followNextPage()" data-i18n="btn_next"></button>
                     <span id="follow-page-info" style="color:#808590; font-size:12px"></span>
                 </div>
-                <div class="cloud-section collapsed" id="cloud-follow-tags">
-                    <div class="cloud-header" onclick="toggleCloud('cloud-follow-tags')">
+                <div class="cloud-toggles">
+                    <button class="cloud-toggle-btn" type="button" onclick="toggleTagCloud('follow-tags', this)">
+                        <img class="expand-arrow" src="/ui_icons/expand.svg" alt="">
                         <span data-i18n="label_tag_cloud"></span>
-                        <span class="cloud-toggle">
-                            <img class="expand-icon" src="/ui_icons/expand.svg" alt="">
-                        </span>
-                    </div>
+                    </button>
+                    <button class="cloud-toggle-btn" type="button" onclick="toggleTagCloud('follow-authors', this)">
+                        <img class="expand-arrow" src="/ui_icons/expand.svg" alt="">
+                        <span data-i18n="label_author_cloud"></span>
+                    </button>
+                </div>
+                <div class="tag-cloud-wrap" id="follow-tags-wrap" style="display:none">
                     <div class="tag-cloud" id="follow-tag-cloud"></div>
                 </div>
-                <div class="cloud-section collapsed" id="cloud-follow-authors">
-                    <div class="cloud-header" onclick="toggleCloud('cloud-follow-authors')">
-                        <span data-i18n="label_author_cloud"></span>
-                        <span class="cloud-toggle">
-                            <img class="expand-icon" src="/ui_icons/expand.svg" alt="">
-                        </span>
-                    </div>
+                <div class="tag-cloud-wrap" id="follow-authors-wrap" style="display:none">
                     <div class="tag-cloud" id="follow-author-cloud"></div>
                 </div>
             </div>
@@ -167,13 +174,13 @@
                         data-i18n="btn_fetch_ranking"></button>
                     <span class="status-text" id="ranking-status"></span>
                 </div>
-                <div class="cloud-section collapsed" id="cloud-ranking">
-                    <div class="cloud-header" onclick="toggleCloud('cloud-ranking')">
+                <div class="cloud-toggles">
+                    <button class="cloud-toggle-btn" type="button" onclick="toggleTagCloud('ranking-tags', this)">
+                        <img class="expand-arrow" src="/ui_icons/expand.svg" alt="">
                         <span data-i18n="label_tag_cloud"></span>
-                        <span class="cloud-toggle">
-                            <img class="expand-icon" src="/ui_icons/expand.svg" alt="">
-                        </span>
-                    </div>
+                    </button>
+                </div>
+                <div class="tag-cloud-wrap" id="ranking-tags-wrap" style="display:none">
                     <div class="tag-cloud" id="ranking-tag-cloud"></div>
                 </div>
             </div>
@@ -425,10 +432,8 @@
                 <div class="row">
                     <label class="label-wide" data-i18n="settings_web_ajax_mode"></label>
                     <select id="cfg-api.web_ajax_mode" style="flex:1; max-width:320px">
+                        <option value="auto" data-i18n="ajax_mode_auto"></option>
                         <option value="disabled" data-i18n="ajax_mode_disabled"></option>
-                        <option value="illust_only" data-i18n="ajax_mode_illust"></option>
-                        <option value="illust_user" data-i18n="ajax_mode_illust_user"></option>
-                        <option value="global" data-i18n="ajax_mode_global"></option>
                     </select>
                 </div>
                 <div class="adv-hint" data-i18n="web_ajax_mode_hint"></div>
@@ -491,16 +496,24 @@
                     <div class="iv-tags" id="iv-tags"></div>
 
                     <div class="iv-user-card" id="iv-user-card"></div>
-                    <div class="iv-actions" id="iv-actions">
-                        <button class="iv-action-btn" id="iv-bookmark-btn" onclick="toggleIllustBookmark()">
-                            <img class="btn-icon" src="/ui_icons/bookmark_pixiv.svg" alt="">
-                            <span id="iv-bookmark-label" data-i18n="btn_pixiv_bookmark"></span>
-                        </button>
-                        <button class="iv-action-btn" onclick="downloadCurrentIllust()">
-                            <img class="btn-icon" src="/ui_icons/download.svg" alt="">
-                            <span data-i18n="btn_download"></span>
-                        </button>
-                    </div>
+                                        <div class="iv-actions">
+                                            <button class="iv-action-btn" id="iv-bookmark-btn" onclick="toggleIllustBookmark()">
+                                                <img class="btn-icon" src="/ui_icons/bookmark_pixiv.svg" alt="">
+                                                <span id="iv-bookmark-label" data-i18n="btn_pixiv_bookmark"></span>
+                                            </button>
+                                            <button class="iv-action-btn" id="iv-share-btn" onclick="toggleShareMenu(event)">
+                                                <span data-i18n="btn_share"></span>
+                                            </button>
+                                            <button class="iv-action-btn" onclick="downloadCurrentIllust()">
+                                                <img class="btn-icon" src="/ui_icons/download.svg" alt="">
+                                                <span data-i18n="btn_download"></span>
+                                            </button>
+                                            <div class="share-menu" id="share-menu" style="display:none">
+                                                <button type="button" onclick="copyIllustId()" data-i18n="share_copy_id"></button>
+                                                <button type="button" onclick="copyIllustUrl()" data-i18n="share_copy_url"></button>
+                                                <button type="button" onclick="copyIllustDetail()" data-i18n="share_copy_detail"></button>
+                                            </div>
+                                        </div>
                 </div>
             </div>
         </div>

@@ -198,8 +198,8 @@ class ConfigManager:
                 write_log(t('config_loaded', path=str(CONFIG_FILE)), 'info')
                 merged = self._merge_defaults(cfg)
                 validated, errors = self._validate(merged)
-                for key, val, default, err in errors:
-                    write_log(t('config_invalid', key=key, value=val,
+                for path, val, default, err in errors:
+                    write_log(t('config_invalid', key=path, value=val,
                                 default=default, error=err), 'warn')
                 self.config = validated
                 if errors:
@@ -3623,7 +3623,7 @@ async def proxy_image_handler(request):
 
 
 async def ws_handler(request):
-    ws = web.WebSocketResponse()
+    ws = web.WebSocketResponse(heartbeat=30.0)
     await ws.prepare(request)
     bridge = request.app['bridge']
     await bridge.register(ws)
