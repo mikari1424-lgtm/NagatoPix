@@ -153,6 +153,7 @@ class ConfigManager:
         'proxy': '',
         'language': 'auto',         # auto | zh-CN | en
         'theme': 'dark',            # dark | light
+        'ugoira_format': 'gif',
         'performance': {
             'download_mode': 'normal',          # normal | high
             'parallel_workers': 0,              # 0 = auto
@@ -179,7 +180,7 @@ class ConfigManager:
         'api.parallel_requests':        ('int',   1,   8),
     }
 
-    STRING_FIELDS = ('download_dir', 'proxy', 'language', 'theme')
+    STRING_FIELDS = ('download_dir', 'proxy', 'language', 'theme', 'ugoira_format')
 
     def __init__(self):
         self.config = self._load_or_init()
@@ -285,6 +286,8 @@ class ConfigManager:
             result['language'] = 'auto'
         if result.get('theme') not in ('dark', 'light'):
             result['theme'] = 'dark'
+        if result.get('ugoira_format') not in ('gif', 'apng', 'webp'):
+            result['ugoira_format'] = 'gif'
         if result['performance'].get('download_mode') not in ('normal', 'high'):
             result['performance']['download_mode'] = 'normal'
 
@@ -981,6 +984,18 @@ class PixivAPI:
         self.ensure_login()
         return self._call_with_retry(
             self.api.illust_detail, iid).get("illust", {})
+
+    def get_ugoira_metadata(self, iid):
+        """Fetch ugoira frame metadata (zip url + frame delays)."""
+        self.ensure_login()
+        try:
+            resp = self._call_with_retry(self.api.ugoira_metadata, iid)
+        except Exception as e:
+            write_log(f"ugoira_metadata {iid} failed: {e}", 'warn')
+            return {}
+        if not resp:
+            return {}
+        return resp.get('ugoira_metadata', {}) or {}
 
     def get_novel_detail(self, nid):
         self.ensure_login()
@@ -1959,6 +1974,29 @@ class DownloadWorker:
                 f"https://www.pixiv.net/artworks/{iid}",
         }
 
+        # Ugoira → dedicated pipeline
+        if info.get('type') == 'ugoira':
+            ok, pid, saved_path, meta_d = self._process_ugoira(
+                iid, info, metadata)
+            if ok:
+                # history
+                append_history({
+                    'id': iid, 'title': title,
+                    'page_count': 1,
+                    'author': author, 'author_id': author_id,
+                    'tags': final_tags,
+                    'ai_generated': ai_type == 2,
+                    'sensitive': x_restrict > 0 or bool(restr_attrs),
+                    'restriction': (
+                        "R-18" if x_restrict == 1 else
+                        "R-18G" if x_restrict == 2 else
+                        "R-15" if restr_attrs else ""),
+                    'publish_time': format_date(create_date),
+                    'downloaded_at': int(time.time()),
+                    'type': 'ugoira',
+                })
+            return ok, pid, saved_path, meta_d
+
         # Collect image URLs
         urls_list = []
         if page_count == 1:
@@ -2047,6 +2085,139 @@ class DownloadWorker:
             'downloaded_at': int(time.time()),
         })
         return True, iid, (saved[0] if saved else None), metadata
+
+    # ---------- Ugoira ----------
+    def _process_ugoira(self, iid, info, metadata):
+        """
+        info: full illust detail (already fetched)
+        metadata: exif dict built by _process_illust
+        Returns (ok, iid, saved_path, metadata)
+        """
+        self._update_item_status(iid, stage='ugoira_meta', progress=10)
+
+        meta = self.api.get_ugoira_metadata(iid)
+        if not meta:
+            write_log(f"ugoira {iid}: no metadata", 'warn')
+            self._update_item_status(iid, status='failed',
+                                     stage='ugoira_meta',
+                                     error='ugoira_meta_failed')
+            return False, iid, None, metadata
+
+        zip_urls = meta.get('zip_urls') or {}
+        zip_url = (zip_urls.get('medium')
+                   or zip_urls.get('original')
+                   or next(iter(zip_urls.values()), ''))
+        frames = meta.get('frames') or []
+        if not zip_url or not frames:
+            write_log(f"ugoira {iid}: empty zip url or frames", 'warn')
+            self._update_item_status(iid, status='failed',
+                                     stage='ugoira_meta',
+                                     error='ugoira_meta_empty')
+            return False, iid, None, metadata
+
+        fmt = str(self.config.get('ugoira_format', 'gif')).lower()
+        if fmt not in ('gif', 'apng', 'webp'):
+            fmt = 'gif'
+        ext_map = {'gif': '.gif', 'apng': '.apng', 'webp': '.webp'}
+        out_path = self.download_dir / f"{iid}_ugoira{ext_map[fmt]}"
+
+        if out_path.exists():
+            write_log(t('file_exists', path=str(out_path)), 'info')
+            self._update_item_status(iid, status='success',
+                                     stage='done', progress=100)
+            return True, iid, out_path, metadata
+
+        with tempfile.TemporaryDirectory(prefix=f"ugoira_{iid}_") as tmpdir:
+            tmp = Path(tmpdir)
+            zip_path = tmp / f"{iid}.zip"
+
+            self._update_item_status(iid, stage='ugoira_download', progress=20)
+            if not self.api.download_image(zip_url, zip_path):
+                self._update_item_status(iid, status='failed',
+                                         stage='ugoira_download',
+                                         error='zip_download_failed')
+                return False, iid, None, metadata
+
+            self._update_item_status(iid, stage='ugoira_unzip', progress=35)
+            try:
+                with zipfile.ZipFile(zip_path) as zf:
+                    zf.extractall(tmp)
+            except Exception as e:
+                write_log(f"ugoira {iid}: unzip failed: {e}", 'error')
+                self._update_item_status(iid, status='failed',
+                                         stage='ugoira_unzip',
+                                         error='unzip_failed')
+                return False, iid, None, metadata
+
+            self._update_item_status(iid, stage='ugoira_compose', progress=50)
+            try:
+                durations, images = [], []
+                total = len(frames)
+                for idx, fr in enumerate(frames):
+                    fn = fr.get('file') or ''
+                    delay = int(fr.get('delay') or 50)
+                    fp = tmp / fn
+                    if not fp.exists():
+                        # 兜底：按序号找
+                        cand = sorted(tmp.glob(f"*{Path(fn).suffix}"))
+                        if idx < len(cand):
+                            fp = cand[idx]
+                        else:
+                            continue
+                    img = Image.open(fp)
+                    img.load()
+                    if img.mode not in ('RGB', 'RGBA', 'P'):
+                        img = img.convert('RGBA')
+                    images.append(img.copy())
+                    durations.append(max(20, delay))
+                    if total <= 20 or idx % 5 == 0 or idx == total - 1:
+                        self._update_item_status(
+                            iid, stage='ugoira_compose',
+                            progress=int(50 + (idx + 1) / total * 35))
+
+                if not images:
+                    write_log(f"ugoira {iid}: no frames loaded", 'warn')
+                    self._update_item_status(iid, status='failed',
+                                             stage='ugoira_compose',
+                                             error='no_frames')
+                    return False, iid, None, metadata
+
+                save_kwargs = {
+                    'save_all': True,
+                    'append_images': images[1:],
+                    'duration': durations,
+                    'loop': 0,
+                }
+                if fmt == 'gif':
+                    images[0].save(out_path, format='GIF',
+                                   disposal=2, **save_kwargs)
+                elif fmt == 'apng':
+                    images[0].save(out_path, format='PNG', **save_kwargs)
+                else:
+                    images[0].save(out_path, format='WEBP', **save_kwargs)
+
+                for img in images:
+                    img.close()
+            except Exception as e:
+                write_log(f"ugoira {iid}: compose failed: {e}", 'error')
+                self._update_item_status(iid, status='failed',
+                                         stage='ugoira_compose',
+                                         error='compose_failed')
+                return False, iid, None, metadata
+
+        self._update_item_status(iid, stage='writing_meta', progress=90)
+        ok, _ = self.exiftool.write_metadata(out_path, metadata,
+                                             export_json=False)
+        if not ok:
+            write_log(t('metadata_failed', path=str(out_path)), 'warn')
+            self._update_item_status(iid, status='failed',
+                                     stage='metadata',
+                                     error='metadata_failed')
+            return False, iid, out_path, metadata
+
+        self._update_item_status(iid, status='success',
+                                 stage='done', progress=100)
+        return True, iid, out_path, metadata
 
     # ---------- Novel ----------
     def _process_novel(self, nid, cached_meta=None):

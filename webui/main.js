@@ -626,8 +626,9 @@ function enqueueSelected(containerId, items) {
             it.type === "novel"
                 ? `https://www.pixiv.net/novel/show.php?id=${it.id}`
                 : `https://www.pixiv.net/artworks/${it.id}`;
+        const entry = { url };
         if (it._slim_illust) entry.metadata = { illust: it._slim_illust };
-        return url;
+        return entry;
     });
     send({ cmd: "add_items", items: payload });
 
@@ -1184,15 +1185,14 @@ function renderSearchResults(
     pages,
     total,
     relatedTags,
-    tag,) 
-    {
+    tag,
+) {
     searchIllustItemsRaw = items || [];
     searchNovelItemsRaw = novelItems || [];
     searchCurrentTag = tag || "";
     searchTotal = total || 0;
     searchRelatedTags = relatedTags || [];
 
-    // 清掉上一次搜索残留的标签云筛选，避免新结果被旧 chip 过滤成空
     if (filterSets["search-tag-all-cloud"]) {
         filterSets["search-tag-all-cloud"].clear();
     }
@@ -1200,8 +1200,21 @@ function renderSearchResults(
     searchActivePane = searchIllustItemsRaw.length ? "illust" : "novel";
 
     renderSearchHeaderCard();
-    switchSearchPane(searchActivePane);
     applySearchBookmarkFilter(startPage, pages);
+    switchSearchPane(searchActivePane);
+
+    // 只要有任意一类结果，就显示插画/小说子标签栏
+    const hasAny = searchIllustItemsRaw.length + searchNovelItemsRaw.length > 0;
+    setEl(
+        "search-pane-tabs",
+        (el) => (el.style.display = hasAny ? "" : "none"),
+    );
+
+    // 无小说结果时，直接把子标签栏隐藏掉只剩插画，减少噪音
+    setEl(
+        "search-pane-tab-novel",
+        (el) => (el.style.display = searchNovelItemsRaw.length ? "" : "none"),
+    );
 }
 
 function renderSearchHeaderCard() {
@@ -2314,8 +2327,9 @@ function downloadCurrentIllust() {
         it.type === "novel"
             ? `https://www.pixiv.net/novel/show.php?id=${it.id}`
             : `https://www.pixiv.net/artworks/${it.id}`;
+    const entry = { url };
     if (it._slim_illust) entry.metadata = { illust: it._slim_illust };
-    send({ cmd: "add_items", items: [url] });
+    send({ cmd: "add_items", items: [entry] });
     toast(t("toast_download_added"), "success");
 }
 
@@ -2478,6 +2492,12 @@ function onPresetChange() {
         ti.disabled = mode === "normal";
         if (mode === "normal") ti.value = 1;
     }
+}
+
+function onUgoiraFormatChange() {
+    const v = document.getElementById("dl-ugoira-format")?.value;
+    if (!v) return;
+    send({ cmd: "save_config", data: { ugoira_format: v } });
 }
 
 function onThreadsChange() {
@@ -2858,6 +2878,9 @@ function fillConfig(cfg) {
         applyI18n();
         renderTokenHelp();
     }
+    if (cfg.ugoira_format) {
+            setEl("dl-ugoira-format", (el) => (el.value = cfg.ugoira_format));
+        }
     if (cfg.theme) applyTheme(cfg.theme);
 }
 
