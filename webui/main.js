@@ -1149,22 +1149,30 @@ function switchSearchPane(pane) {
     document
         .querySelectorAll(".search-pane-tab")
         .forEach((b) => b.classList.remove("active"));
-    document
-        .querySelectorAll(".search-result-pane")
-        .forEach((p) => p.classList.remove("active"));
+    document.querySelectorAll(".search-result-pane").forEach((p) => {
+        p.classList.remove("active");
+        // 清掉可能残留的内联 display，让 .active 类接管显隐
+        p.style.display = "";
+    });
 
     const tabBtn = document.getElementById(`search-pane-tab-${pane}`);
     const tabEl = document.getElementById(`search-result-pane-${pane}`);
     if (tabBtn) tabBtn.classList.add("active");
-    if (tabEl) tabEl.classList.add("active");
+    if (tabEl) {
+        tabEl.classList.add("active");
+        tabEl.style.display = ""; // 再清一次，避免被别处设置过
+    }
 
     setEl(
         "search-tag-toggle-hot",
         (el) => (el.style.display = pane === "novel" ? "none" : ""),
     );
-    if (pane === "novel") {
-        setEl("search-tag-hot-wrap", (el) => (el.style.display = "none"));
-        setEl("search-header-total", (el) => (el.textContent = ""));
+    // 切到小说且小说无数据 → 给出明确提示
+    if (pane === "novel" && searchNovelItemsRaw.length === 0) {
+        const container = document.getElementById("search-list-novel");
+        if (container) {
+            container.innerHTML = `<div class="empty-msg">${t("search_no_novel")}</div>`;
+        }
     } else {
         updateSearchHeaderTotal();
     }
@@ -1358,6 +1366,39 @@ function applySearchBookmarkFilter(startPage, pages) {
         const totalVisible = searchIllustItems.length + searchNovelItems.length;
         toast(t("toast_search_done", totalVisible), "success");
     }
+}
+
+function onSearchBarFocus() {
+    // 已有任何搜索结果就切过去；否则只切 tab 停留在搜索页
+    const active = document.querySelector("nav button.active")?.dataset.tab;
+    if (active === "search") return;
+
+    // 搜索 tab 没有对应的 nav 按钮，直接调用 switchTab
+    switchTab("search");
+}
+
+function switchTab(tabName) {
+    const prevNav = document.querySelector("nav button.active")?.dataset.tab;
+
+    document
+        .querySelectorAll("nav button")
+        .forEach((b) => b.classList.remove("active"));
+    document
+        .querySelectorAll(".tab")
+        .forEach((t) => t.classList.remove("active"));
+
+    let navTab = tabName;
+    if (tabName === "search") {
+        navTab = prevNav || "recommend";
+    }
+    const navBtn = document.querySelector(`nav button[data-tab="${navTab}"]`);
+    if (navBtn) navBtn.classList.add("active");
+
+    const tabEl = document.getElementById("tab-" + tabName);
+    if (tabEl) tabEl.classList.add("active");
+    applyUserBgVisibility();
+    updateSelectionCount();
+    scheduleUiStateSave();
 }
 
 function doSearchFromTopbar() {

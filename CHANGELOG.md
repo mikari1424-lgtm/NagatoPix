@@ -1,5 +1,50 @@
 # NagatoPix - Changelog
 
+## 1.3.0
+
+### Changes
+
+**搜索**
+
+- 新增 `WebAjaxClient.search_artworks` / `PixivAPI.search_artworks_ajax`，拿 `illustManga.total` 与 `relatedTags`
+- 搜索分支支持插画 / 漫画 / 动图 / 小说四种类型，双路拉取
+- 中文标签路径 percent-encode，修 latin-1 报错
+
+**UI**
+
+- 顶栏重构：logo 居左、搜索框居中、语言与连接状态居右
+- 侧栏移除搜索入口、语言选择、连接状态
+- 搜索头部卡片：标题 + 百科按钮 + 总数 + 热门标签 / 所有标签
+- 插画 / 小说子标签栏，双结果面板
+- 搜索设置模态框
+- 点击搜索栏直接切到搜索 tab，保留侧栏来源高亮
+
+**小说**
+
+- `get_novel_text` / `get_novel_series` 包装器
+- 小说查看模态框 + 系列索引模态框
+- `format_novel` 补全 `text_length` / `series` / `ai_type` 等字段
+
+**动图**
+
+- `ugoira_metadata` 拉帧 + ZIP 下载解压 + PIL 合成
+- GIF / APNG / WebP 三种导出格式，下载 section 可切换
+- 合成后 ExifTool 写元数据
+
+## 1.2.2
+
+### Added
+
+- Ajax API实验性支持(作品说明+用户简介小范围测试)
+
+### Changed
+
+- 设置界面优化
+
+### Removed
+
+- 从config.toml中移除了refresh_token
+
 ## 1.2.1
 
 ### Added

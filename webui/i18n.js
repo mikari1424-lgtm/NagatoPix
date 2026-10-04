@@ -380,6 +380,7 @@ const I18N = {
         ugoira_gif: "GIF (.gif)",
         ugoira_apng: "APNG (.apng)",
         ugoira_webp: "WebP (.webp)",
+        search_no_novel: "本次搜索未返回小说（请在搜索设置中勾选「小说」）",
     },
     en: {
         connecting: "Connecting...",
@@ -760,6 +761,8 @@ const I18N = {
         ugoira_gif: "GIF (.gif)",
         ugoira_apng: "APNG (.apng)",
         ugoira_webp: "WebP (.webp)",
+        search_no_novel:
+            'No novels in this search (enable "Novel" in search settings)',
     },
 };
 

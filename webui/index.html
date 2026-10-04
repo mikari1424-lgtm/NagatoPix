@@ -9,39 +9,39 @@
 </head>
 
 <body>
-        <header class="topbar">
-            <div class="topbar-left">
-                <div class="logo">
-                    <span class="logo-mark">N</span>
-                    <span class="logo-text">Nagato</span>
-                </div>
+    <header class="topbar">
+        <div class="topbar-left">
+            <div class="logo">
+                <span class="logo-mark">N</span>
+                <span class="logo-text">Nagato</span>
             </div>
-            <div class="topbar-center">
-                <div class="search-bar">
-                    <img class="search-bar-icon" src="/ui_icons/search.svg" alt="">
-                    <select id="search-mode" class="search-bar-mode" onchange="onSearchModeChange()">
-                        <option value="illust" data-i18n="search_mode_illust"></option>
-                        <option value="user" data-i18n="search_mode_user"></option>
-                    </select>
-                    <input type="text" id="search-tag" class="search-bar-input" data-i18n-placeholder="search_tag_ph"
-                        onkeydown="if(event.key==='Enter')doSearchFromTopbar()">
-                    <button class="search-bar-settings-btn" type="button" onclick="openSearchSettings()"
-                        data-i18n-title="search_advanced">
-                        <img src="/ui_icons/search-setting.svg" alt="">
-                    </button>
-                </div>
-            </div>
-            <div class="topbar-right">
-                <div class="conn">
-                    <span class="status-dot" id="conn-status"></span>
-                    <span id="conn-text" data-i18n="connecting"></span>
-                </div>
-                <select id="lang-switcher" class="topbar-select" onchange="switchLanguage(this.value)">
-                    <option value="zh-CN">简体中文</option>
-                    <option value="en">English</option>
+        </div>
+        <div class="topbar-center">
+            <div class="search-bar">
+                <img class="search-bar-icon" src="/ui_icons/search.svg" alt="">
+                <select id="search-mode" class="search-bar-mode" onchange="onSearchModeChange()">
+                    <option value="illust" data-i18n="search_mode_illust"></option>
+                    <option value="user" data-i18n="search_mode_user"></option>
                 </select>
+                <input type="text" id="search-tag" class="search-bar-input" data-i18n-placeholder="search_tag_ph"
+                    onfocus="onSearchBarFocus()" onkeydown="if(event.key==='Enter')doSearchFromTopbar()">
+                <button class="search-bar-settings-btn" type="button" onclick="openSearchSettings()"
+                    data-i18n-title="search_advanced">
+                    <img src="/ui_icons/search-setting.svg" alt="">
+                </button>
             </div>
-        </header>
+        </div>
+        <div class="topbar-right">
+            <div class="conn">
+                <span class="status-dot" id="conn-status"></span>
+                <span id="conn-text" data-i18n="connecting"></span>
+            </div>
+            <select id="lang-switcher" class="topbar-select" onchange="switchLanguage(this.value)">
+                <option value="zh-CN">简体中文</option>
+                <option value="en">English</option>
+            </select>
+        </div>
+    </header>
     <aside class="sidebar">
         <nav>
             <nav>
@@ -182,48 +182,48 @@
             </div>
         </section>
 
-                <section class="tab sticky-results" id="tab-search">
-                    <div class="panel search-header-card" id="search-header-card" style="display:none">
-                        <h2 class="search-header-title">
-                            <span id="search-header-title-text"></span>
-                            <button class="search-header-wiki btn-with-icon" type="button" onclick="searchEncyclopedia()"
-                                data-i18n-title="btn_search_encyclopedia">
-                                <img class="btn-icon" src="/ui_icons/search_ext.svg" alt="">
-                            </button>
-                        </h2>
-                        <div class="search-header-total" id="search-header-total"></div>
-                        <div class="search-header-actions">
-                            <button class="search-tag-toggle" type="button" onclick="toggleSearchTagCloud('hot', this)">
-                                <img class="expand-arrow" src="/ui_icons/expand.svg" alt="">
-                                <span data-i18n="search_hot_tags"></span>
-                            </button>
-                            <button class="search-tag-toggle" type="button" onclick="toggleSearchTagCloud('all', this)">
-                                <img class="expand-arrow" src="/ui_icons/expand.svg" alt="">
-                                <span data-i18n="search_all_tags"></span>
-                            </button>
-                        </div>
-                        <div class="search-tag-cloud-wrap" id="search-tag-hot-wrap" style="display:none">
-                            <div class="tag-cloud" id="search-tag-hot-cloud"></div>
-                        </div>
-                        <div class="search-tag-cloud-wrap" id="search-tag-all-wrap" style="display:none">
-                            <div class="tag-cloud" id="search-tag-all-cloud"></div>
-                        </div>
-                    </div>
-                
-                    <div class="search-pane-tabs" id="search-pane-tabs" style="display:none">
-                        <button class="search-pane-tab active" type="button" id="search-pane-tab-illust"
-                            onclick="switchSearchPane('illust')" data-i18n="search_pane_illust"></button>
-                        <button class="search-pane-tab" type="button" id="search-pane-tab-novel" onclick="switchSearchPane('novel')"
-                            data-i18n="search_pane_novel"></button>
-                    </div>
-                
-                    <div class="panel results-panel search-result-pane" id="search-result-pane-illust">
-                        <div id="search-list-illust"></div>
-                    </div>
-                    <div class="panel results-panel search-result-pane" id="search-result-pane-novel" style="display:none">
-                        <div id="search-list-novel"></div>
-                    </div>
-                </section>
+        <section class="tab sticky-results" id="tab-search">
+            <div class="panel search-header-card" id="search-header-card" style="display:none">
+                <h2 class="search-header-title">
+                    <span id="search-header-title-text"></span>
+                    <button class="search-header-wiki btn-with-icon" type="button" onclick="searchEncyclopedia()"
+                        data-i18n-title="btn_search_encyclopedia">
+                        <img class="btn-icon" src="/ui_icons/search_ext.svg" alt="">
+                    </button>
+                </h2>
+                <div class="search-header-total" id="search-header-total"></div>
+                <div class="search-header-actions">
+                    <button class="search-tag-toggle" type="button" onclick="toggleSearchTagCloud('hot', this)">
+                        <img class="expand-arrow" src="/ui_icons/expand.svg" alt="">
+                        <span data-i18n="search_hot_tags"></span>
+                    </button>
+                    <button class="search-tag-toggle" type="button" onclick="toggleSearchTagCloud('all', this)">
+                        <img class="expand-arrow" src="/ui_icons/expand.svg" alt="">
+                        <span data-i18n="search_all_tags"></span>
+                    </button>
+                </div>
+                <div class="search-tag-cloud-wrap" id="search-tag-hot-wrap" style="display:none">
+                    <div class="tag-cloud" id="search-tag-hot-cloud"></div>
+                </div>
+                <div class="search-tag-cloud-wrap" id="search-tag-all-wrap" style="display:none">
+                    <div class="tag-cloud" id="search-tag-all-cloud"></div>
+                </div>
+            </div>
+
+            <div class="search-pane-tabs" id="search-pane-tabs" style="display:none">
+                <button class="search-pane-tab active" type="button" id="search-pane-tab-illust"
+                    onclick="switchSearchPane('illust')" data-i18n="search_pane_illust"></button>
+                <button class="search-pane-tab" type="button" id="search-pane-tab-novel"
+                    onclick="switchSearchPane('novel')" data-i18n="search_pane_novel"></button>
+            </div>
+
+            <div class="panel results-panel search-result-pane" id="search-result-pane-illust">
+                <div id="search-list-illust"></div>
+            </div>
+            <div class="panel results-panel search-result-pane" id="search-result-pane-novel" style="display:none">
+                <div id="search-list-novel"></div>
+            </div>
+        </section>
 
         <section class="tab sticky-results" id="tab-user-detail">
             <div class="panel controls">
