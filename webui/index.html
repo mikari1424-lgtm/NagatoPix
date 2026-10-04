@@ -9,14 +9,43 @@
 </head>
 
 <body>
+        <header class="topbar">
+            <div class="topbar-left">
+                <div class="logo">
+                    <span class="logo-mark">N</span>
+                    <span class="logo-text">Nagato</span>
+                </div>
+            </div>
+            <div class="topbar-center">
+                <div class="search-bar">
+                    <img class="search-bar-icon" src="/ui_icons/search.svg" alt="">
+                    <select id="search-mode" class="search-bar-mode" onchange="onSearchModeChange()">
+                        <option value="illust" data-i18n="search_mode_illust"></option>
+                        <option value="user" data-i18n="search_mode_user"></option>
+                    </select>
+                    <input type="text" id="search-tag" class="search-bar-input" data-i18n-placeholder="search_tag_ph"
+                        onkeydown="if(event.key==='Enter')doSearchFromTopbar()">
+                    <button class="search-bar-settings-btn" type="button" onclick="openSearchSettings()"
+                        data-i18n-title="search_advanced">
+                        <img src="/ui_icons/search-setting.svg" alt="">
+                    </button>
+                </div>
+            </div>
+            <div class="topbar-right">
+                <div class="conn">
+                    <span class="status-dot" id="conn-status"></span>
+                    <span id="conn-text" data-i18n="connecting"></span>
+                </div>
+                <select id="lang-switcher" class="topbar-select" onchange="switchLanguage(this.value)">
+                    <option value="zh-CN">简体中文</option>
+                    <option value="en">English</option>
+                </select>
+            </div>
+        </header>
     <aside class="sidebar">
-        <div class="logo">
-            <span class="logo-mark">N</span>
-            <span class="logo-text">Nagato</span>
-        </div>
         <nav>
             <nav>
-                <button data-tab="recommend">
+                <button data-tab="recommend" class="active">
                     <img class="nav-icon" src="/ui_icons/recommend.svg" alt="">
                     <span data-i18n="nav_recommend"></span>
                 </button>
@@ -27,10 +56,6 @@
                 <button data-tab="ranking">
                     <img class="nav-icon" src="/ui_icons/ranking.svg" alt="">
                     <span data-i18n="nav_ranking"></span>
-                </button>
-                <button data-tab="search" class="active">
-                    <img class="nav-icon" src="/ui_icons/search.svg" alt="">
-                    <span data-i18n="nav_search"></span>
                 </button>
                 <button data-tab="user-detail">
                     <img class="nav-icon" src="/ui_icons/users.svg" alt="">
@@ -53,14 +78,6 @@
         <div class="sidebar-bottom">
             <div class="theme-toggle" onclick="toggleTheme()" title="Theme">
                 <span id="theme-icon">🌙</span>
-            </div>
-            <select id="lang-switcher" onchange="switchLanguage(this.value)">
-                <option value="zh-CN">简体中文</option>
-                <option value="en">English</option>
-            </select>
-            <div class="conn">
-                <span class="status-dot" id="conn-status"></span>
-                <span id="conn-text" data-i18n="connecting"></span>
             </div>
         </div>
     </aside>
@@ -165,117 +182,48 @@
             </div>
         </section>
 
-        <section class="tab sticky-results" id="tab-search">
-            <div class="panel controls">
-                <div class="row">
-                    <label data-i18n="search_mode"></label>
-                    <select id="search-mode" onchange="onSearchModeChange()">
-                        <option value="illust" data-i18n="search_mode_illust"></option>
-                        <option value="user" data-i18n="search_mode_user"></option>
-                    </select>
-                </div>
-
-                <div id="search-pane-illust">
-                    <div class="row">
-                        <label data-i18n="search_tag"></label>
-                        <input type="text" id="search-tag" data-i18n-placeholder="search_tag_ph"
-                            style="flex:1; max-width:300px">
-                        <button class="secondary btn-with-icon" onclick="searchEncyclopedia()" id="btn-search-ext"
-                            title="萌娘百科">
-                            <img class="btn-icon" src="/ui_icons/search_ext.svg" alt="">
-                            <span data-i18n="btn_search_encyclopedia"></span>
-                        </button>
-                        <label data-i18n="search_sort"></label>
-                        <select id="search-sort">
-                            <option value="date_desc" data-i18n="sort_newest"></option>
-                            <option value="date_asc" data-i18n="sort_oldest"></option>
-                        </select>
-                    </div>
-                    <div class="row">
-                        <label data-i18n="search_page"></label>
-                        <input type="number" id="search-page" value="1" min="1" style="width:80px">
-                        <label data-i18n="search_pages"></label>
-                        <input type="number" id="search-pages" value="1" min="1" max="200" style="width:80px">
-                        <button class="primary" onclick="doSearch()" id="btn-search" data-i18n="btn_search"></button>
-                        <span class="status-text" id="search-status"></span>
-                    </div>
-
-                    <div class="cloud-section collapsed" id="cloud-search-advanced">
-                        <div class="cloud-header" onclick="toggleCloud('cloud-search-advanced')">
-                            <span data-i18n="search_advanced"></span>
-                            <span class="cloud-toggle">
-                                <img class="expand-icon" src="/ui_icons/expand.svg" alt="">
-                            </span>
+                <section class="tab sticky-results" id="tab-search">
+                    <div class="panel search-header-card" id="search-header-card" style="display:none">
+                        <h2 class="search-header-title">
+                            <span id="search-header-title-text"></span>
+                            <button class="search-header-wiki btn-with-icon" type="button" onclick="searchEncyclopedia()"
+                                data-i18n-title="btn_search_encyclopedia">
+                                <img class="btn-icon" src="/ui_icons/search_ext.svg" alt="">
+                            </button>
+                        </h2>
+                        <div class="search-header-total" id="search-header-total"></div>
+                        <div class="search-header-actions">
+                            <button class="search-tag-toggle" type="button" onclick="toggleSearchTagCloud('hot', this)">
+                                <img class="expand-arrow" src="/ui_icons/expand.svg" alt="">
+                                <span data-i18n="search_hot_tags"></span>
+                            </button>
+                            <button class="search-tag-toggle" type="button" onclick="toggleSearchTagCloud('all', this)">
+                                <img class="expand-arrow" src="/ui_icons/expand.svg" alt="">
+                                <span data-i18n="search_all_tags"></span>
+                            </button>
                         </div>
-                        <div class="search-advanced-body">
-                            <div class="row">
-                                <label data-i18n="search_range"></label>
-                                <select id="search-target">
-                                    <option value="partial_match_for_tags" data-i18n="search_target_partial"></option>
-                                    <option value="exact_match_for_tags" selected data-i18n="search_target_exact">
-                                    </option>
-                                    <option value="title_and_caption" data-i18n="search_target_title_caption"></option>
-                                </select>
-                            </div>
-                            <div class="row">
-                                <label data-i18n="search_duration"></label>
-                                <select id="search-duration" onchange="onDurationChange()">
-                                    <option value="" data-i18n="duration_any"></option>
-                                    <option value="within_last_day" data-i18n="duration_day"></option>
-                                    <option value="within_last_week" data-i18n="duration_week"></option>
-                                    <option value="within_last_month" data-i18n="duration_month"></option>
-                                    <option value="custom" data-i18n="duration_custom"></option>
-                                </select>
-                            </div>
-                            <div class="row" id="search-custom-dates" style="display:none">
-                                <label data-i18n="search_date_from"></label>
-                                <input type="date" id="search-start-date" style="width:150px">
-                                <label data-i18n="search_date_to"></label>
-                                <input type="date" id="search-end-date" style="width:150px">
-                                <span class="hint-text" data-i18n="search_date_hint"></span>
-                            </div>
-                            <div class="row">
-                                <label data-i18n="search_type"></label>
-                                <label><input type="checkbox" id="search-type-illust" checked>
-                                    <span data-i18n="type_illust"></span></label>
-                                <label><input type="checkbox" id="search-type-manga" checked>
-                                    <span data-i18n="type_manga"></span></label>
-                                <label><input type="checkbox" id="search-type-novel" checked>
-                                    <span data-i18n="type_novel"></span></label>
-                                <label><input type="checkbox" id="search-type-ugoira" checked>
-                                    <span data-i18n="type_ugoira"></span></label>
-                                <span class="hint-text" data-i18n="search_type_hint"></span>
-                            </div>
-                            <div class="row">
-                                <label data-i18n="search_bookmarks"></label>
-                                <input type="number" id="search-bm-min" value="0" min="0" style="width:100px"
-                                    data-i18n-placeholder="search_bm_min_ph" oninput="applySearchBookmarkFilter()">
-                                <span style="color:#808590">~</span>
-                                <input type="number" id="search-bm-max" value="0" min="0" style="width:100px"
-                                    data-i18n-placeholder="search_bm_max_ph" oninput="applySearchBookmarkFilter()">
-                                <span class="hint-text" data-i18n="search_bookmarks_hint"></span>
-                            </div>
+                        <div class="search-tag-cloud-wrap" id="search-tag-hot-wrap" style="display:none">
+                            <div class="tag-cloud" id="search-tag-hot-cloud"></div>
+                        </div>
+                        <div class="search-tag-cloud-wrap" id="search-tag-all-wrap" style="display:none">
+                            <div class="tag-cloud" id="search-tag-all-cloud"></div>
                         </div>
                     </div>
-                </div>
-
-                <div id="search-pane-user" style="display:none">
-                    <div class="row">
-                        <label data-i18n="usearch_word"></label>
-                        <input type="text" id="usearch-word" data-i18n-placeholder="usearch_ph"
-                            style="flex:1; max-width:300px">
-                        <label data-i18n="search_page"></label>
-                        <input type="number" id="usearch-page" value="1" min="1" style="width:80px">
-                        <button class="primary" onclick="doUserSearch()" id="btn-user-search"
-                            data-i18n="usearch_btn"></button>
-                        <span class="status-text" id="usearch-status"></span>
+                
+                    <div class="search-pane-tabs" id="search-pane-tabs" style="display:none">
+                        <button class="search-pane-tab active" type="button" id="search-pane-tab-illust"
+                            onclick="switchSearchPane('illust')" data-i18n="search_pane_illust"></button>
+                        <button class="search-pane-tab" type="button" id="search-pane-tab-novel" onclick="switchSearchPane('novel')"
+                            data-i18n="search_pane_novel"></button>
                     </div>
-                </div>
-            </div>
-            <div class="panel results-panel">
-                <div id="search-list"></div>
-            </div>
-        </section>
+                
+                    <div class="panel results-panel search-result-pane" id="search-result-pane-illust">
+                        <div id="search-list-illust"></div>
+                    </div>
+                    <div class="panel results-panel search-result-pane" id="search-result-pane-novel" style="display:none">
+                        <div id="search-list-novel"></div>
+                    </div>
+                </section>
 
         <section class="tab sticky-results" id="tab-user-detail">
             <div class="panel controls">
@@ -591,6 +539,111 @@
         </div>
     </div>
 
+    <div class="modal-overlay" id="search-settings-modal">
+        <div class="modal-content" style="max-width:600px">
+            <button class="modal-close" onclick="closeSearchSettings()">×</button>
+            <h3 class="modal-title" data-i18n="search_advanced"></h3>
+
+            <div id="search-settings-illust">
+                <div class="row">
+                    <label class="label-wide" data-i18n="search_sort"></label>
+                    <select id="search-sort" style="flex:1">
+                        <option value="date_desc" data-i18n="sort_newest"></option>
+                        <option value="date_asc" data-i18n="sort_oldest"></option>
+                    </select>
+                </div>
+                <div class="row">
+                    <label class="label-wide" data-i18n="search_page"></label>
+                    <input type="number" id="search-page" value="1" min="1" style="width:80px">
+                    <label data-i18n="search_pages"></label>
+                    <input type="number" id="search-pages" value="1" min="1" max="200" style="width:80px">
+                </div>
+                <div class="row">
+                    <label class="label-wide" data-i18n="search_range"></label>
+                    <select id="search-target" style="flex:1">
+                        <option value="partial_match_for_tags" data-i18n="search_target_partial"></option>
+                        <option value="exact_match_for_tags" selected data-i18n="search_target_exact"></option>
+                        <option value="title_and_caption" data-i18n="search_target_title_caption"></option>
+                    </select>
+                </div>
+                <div class="row">
+                    <label class="label-wide" data-i18n="search_duration"></label>
+                    <select id="search-duration" onchange="onDurationChange()" style="flex:1">
+                        <option value="" data-i18n="duration_any"></option>
+                        <option value="within_last_day" data-i18n="duration_day"></option>
+                        <option value="within_last_week" data-i18n="duration_week"></option>
+                        <option value="within_last_month" data-i18n="duration_month"></option>
+                        <option value="custom" data-i18n="duration_custom"></option>
+                    </select>
+                </div>
+                <div class="row" id="search-custom-dates" style="display:none">
+                    <label class="label-wide" data-i18n="search_date_from"></label>
+                    <input type="date" id="search-start-date" style="flex:1">
+                    <label data-i18n="search_date_to"></label>
+                    <input type="date" id="search-end-date" style="flex:1">
+                </div>
+                <div class="row">
+                    <label class="label-wide" data-i18n="search_type"></label>
+                    <label><input type="checkbox" id="search-type-illust" checked>
+                        <span data-i18n="type_illust"></span></label>
+                    <label><input type="checkbox" id="search-type-manga" checked>
+                        <span data-i18n="type_manga"></span></label>
+                    <label><input type="checkbox" id="search-type-ugoira">
+                        <span data-i18n="type_ugoira"></span></label>
+                    <label><input type="checkbox" id="search-type-novel">
+                        <span data-i18n="type_novel"></span></label>
+                </div>
+                <div class="row">
+                    <label class="label-wide" data-i18n="search_bookmarks"></label>
+                    <input type="number" id="search-bm-min" value="0" min="0" style="width:100px"
+                        data-i18n-placeholder="search_bm_min_ph">
+                    <span class="range-sep">~</span>
+                    <input type="number" id="search-bm-max" value="0" min="0" style="width:100px"
+                        data-i18n-placeholder="search_bm_max_ph">
+                </div>
+            </div>
+
+            <div id="search-settings-user" style="display:none">
+                <div class="row">
+                    <label class="label-wide" data-i18n="search_page"></label>
+                    <input type="number" id="usearch-page" value="1" min="1" style="width:80px">
+                </div>
+            </div>
+
+            <div class="row modal-actions">
+                <button class="secondary" onclick="closeSearchSettings()" data-i18n="btn_close"></button>
+                <button class="primary" onclick="doSearchFromTopbar()" data-i18n="btn_search"></button>
+            </div>
+        </div>
+    </div>
+    <!-- Novel viewer -->
+    <div class="modal-overlay" id="novel-viewer-modal">
+        <div class="modal-content novel-viewer-content">
+            <button class="modal-close" onclick="closeNovelViewer()">×</button>
+            <div class="novel-viewer-header">
+                <a class="novel-title" id="nv-title" href="#" target="_blank" rel="noopener"></a>
+                <div class="novel-meta" id="nv-meta"></div>
+                <div class="novel-series" id="nv-series"></div>
+                <div class="iv-tags" id="nv-tags"></div>
+            </div>
+            <div class="novel-viewer-nav">
+                <button class="secondary" id="nv-prev" onclick="novelViewerPrev()" data-i18n="novel_prev"></button>
+                <button class="secondary" id="nv-series-btn" onclick="openNovelSeries()"
+                    data-i18n="novel_series"></button>
+                <button class="secondary" id="nv-next" onclick="novelViewerNext()" data-i18n="novel_next"></button>
+            </div>
+            <div class="novel-text" id="nv-text"></div>
+        </div>
+    </div>
+
+    <!-- Novel series index -->
+    <div class="modal-overlay" id="novel-series-modal">
+        <div class="modal-content" style="max-width:760px">
+            <button class="modal-close" onclick="closeNovelSeries()">×</button>
+            <h3 class="modal-title" id="ns-title" data-i18n="novel_series_title"></h3>
+            <div id="ns-list" class="novel-series-list"></div>
+        </div>
+    </div>
     <!-- Add Task Modal -->
     <div class="modal-overlay" id="add-task-modal">
         <div class="modal-content" style="max-width:640px">
@@ -629,30 +682,30 @@
             </div>
         </div>
     </div>
-<div class="modal-overlay" id="add-account-modal">
-    <div class="modal-content" style="max-width:560px">
-        <button class="modal-close" onclick="closeAddAccountModal()">×</button>
-        <h3 style="color:var(--accent); margin-bottom:16px" data-i18n="account_add_title"></h3>
+    <div class="modal-overlay" id="add-account-modal">
+        <div class="modal-content" style="max-width:560px">
+            <button class="modal-close" onclick="closeAddAccountModal()">×</button>
+            <h3 style="color:var(--accent); margin-bottom:16px" data-i18n="account_add_title"></h3>
 
-        <div class="row" style="flex-direction:column; align-items:stretch">
-            <label data-i18n="settings_token" style="margin-bottom:6px"></label>
-            <input type="text" id="new-account-token" data-i18n-placeholder="token_ph" style="width:100%">
-        </div>
+            <div class="row" style="flex-direction:column; align-items:stretch">
+                <label data-i18n="settings_token" style="margin-bottom:6px"></label>
+                <input type="text" id="new-account-token" data-i18n-placeholder="token_ph" style="width:100%">
+            </div>
 
-        <div class="row" style="flex-direction:column; align-items:stretch;
+            <div class="row" style="flex-direction:column; align-items:stretch;
                     margin-top:12px">
-            <label data-i18n="settings_phpsessid" style="margin-bottom:6px"></label>
-            <input type="text" id="new-account-phpsessid" data-i18n-placeholder="phpsessid_ph"
-                style="width:100%; font-family:monospace; font-size:12px">
-        </div>
-        <div class="adv-hint" data-i18n="phpsessid_hint"></div>
+                <label data-i18n="settings_phpsessid" style="margin-bottom:6px"></label>
+                <input type="text" id="new-account-phpsessid" data-i18n-placeholder="phpsessid_ph"
+                    style="width:100%; font-family:monospace; font-size:12px">
+            </div>
+            <div class="adv-hint" data-i18n="phpsessid_hint"></div>
 
-        <div class="row" style="margin-top:16px; justify-content:flex-end">
-            <button class="secondary" onclick="closeAddAccountModal()" data-i18n="btn_cancel"></button>
-            <button class="primary" onclick="submitAddAccount()" data-i18n="btn_add_account"></button>
+            <div class="row" style="margin-top:16px; justify-content:flex-end">
+                <button class="secondary" onclick="closeAddAccountModal()" data-i18n="btn_cancel"></button>
+                <button class="primary" onclick="submitAddAccount()" data-i18n="btn_add_account"></button>
+            </div>
         </div>
     </div>
-</div>
 
     <!-- Token Help Modal -->
     <div class="modal-overlay" id="token-help-modal">

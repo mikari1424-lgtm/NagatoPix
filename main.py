@@ -28,7 +28,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import urlparse, parse_qs, unquote, quote
 
 import requests
 import aiohttp
@@ -755,9 +755,10 @@ class RateLimiter:
 # ============================================================
 class WebAjaxClient:
     """
-    仅用于两个场景：
+    仅用于这些场景：
     1. 下载时补全 caption（App API 会过滤含 URL 的说明）
     2. 用户简介的 commentHtml
+    3. 搜索时统计数据+关联标签
     """
     BASE = "https://www.pixiv.net/ajax"
     WWW  = "https://www.pixiv.net"
@@ -843,6 +844,30 @@ class WebAjaxClient:
         return self._get(f"user/{uid}",
                          {'full': 1, 'lang': self.lang_param()},
                          referer=f"{self.WWW}/users/{uid}")
+
+    def search_artworks(self, word, page=1, s_mode='s_tag_full',
+                        type_='all', duration=None):
+        word_enc = quote(word, safe='')
+        params = {
+            'p': page,
+            's_mode': s_mode,
+            'type': type_,
+            'lang': self.lang_param(),
+        }
+        if duration:
+            params['duration'] = duration
+        body = self._get(
+            f"search/artworks/{word_enc}", params,
+            referer=f"{self.WWW}/tags/{word_enc}/artworks")
+        if isinstance(body, dict) and body:
+            write_log(
+                f"Ajax search '{word}': total="
+                f"{(body.get('illustManga') or {}).get('total')}, "
+                f"related={len(body.get('relatedTags') or [])}",
+                'info')
+        else:
+            write_log(f"Ajax search '{word}': empty body", 'warn')
+        return body if isinstance(body, dict) else {}
 
 
 # ============================================================
@@ -962,6 +987,30 @@ class PixivAPI:
         return self._call_with_retry(
             self.api.novel_detail, nid).get("novel", {})
 
+    def get_novel_text(self, nid):
+        """Fetch full novel text + series navigation."""
+        self.ensure_login()
+        try:
+            resp = self._call_with_retry(self.api.novel_text, nid)
+            return resp or {}
+        except Exception as e:
+            write_log(f"novel_text {nid} failed: {e}", 'warn')
+            return {}
+
+    def get_novel_series(self, series_id, last_order=None):
+        """Fetch all novels in a series."""
+        self.ensure_login()
+        kwargs = {}
+        if last_order is not None:
+            kwargs['last_order'] = last_order
+        try:
+            resp = self._call_with_retry(
+                self.api.novel_series, series_id, **kwargs)
+            return resp or {}
+        except Exception as e:
+            write_log(f"novel_series {series_id} failed: {e}", 'warn')
+            return {}
+
     def search_illust(self, word, target='exact_match_for_tags',
                       sort='date_desc', offset=0, duration=None,
                       start_date=None, end_date=None):
@@ -974,6 +1023,18 @@ class PixivAPI:
             kwargs['end_date'] = end_date
         return self._call_with_retry(self.api.search_illust, word, **kwargs)
 
+    def search_novel(self, word, target='exact_match_for_tags',
+                     sort='date_desc', offset=0, duration=None,
+                     start_date=None, end_date=None):
+        self.ensure_login()
+        kwargs = {'search_target': target, 'sort': sort, 'offset': offset}
+        if duration:
+            kwargs['duration'] = duration
+        if start_date and end_date:
+            kwargs['start_date'] = start_date
+            kwargs['end_date'] = end_date
+        return self._call_with_retry(self.api.search_novel, word, **kwargs)
+    
     def get_ranking(self, mode='day', date=None, offset=0):
         self.ensure_login()
         return self._call_with_retry(
@@ -1048,11 +1109,34 @@ class PixivAPI:
         return self._call_with_retry(
             self.api.illust_follow, restrict=restrict, offset=offset)
 
-    def get_user_bookmarks(self, uid, restrict='public', offset=0):
+    def get_user_bookmarks(self, uid, restrict='public',
+                       max_bookmark_id=None):
+        """
+        书签分页走游标：max_bookmark_id。
+        pixivpy3 的 user_bookmarks_illust 不接受 offset。
+        """
         self.ensure_login()
-        return self._call_with_retry(
-            self.api.user_bookmarks_illust, uid,
-            restrict=restrict, offset=offset)
+        kwargs = {'restrict': restrict}
+        if max_bookmark_id is not None:
+            kwargs['max_bookmark_id'] = int(max_bookmark_id)
+        return self._call_with_retry(self.api.user_bookmarks_illust, uid, **kwargs)
+
+    def search_artworks_ajax(self, word, page=1, target=None, duration=None):
+        if not (self.web_ajax and self.web_ajax.is_available()):
+            write_log("Ajax search skipped: Web Ajax unavailable", 'info')
+            return {}
+        s_mode_map = {
+            'partial_match_for_tags': 's_tag',
+            'exact_match_for_tags': 's_tag_full',
+            'title_and_caption': 's_tc',
+        }
+        s_mode = s_mode_map.get(target, 's_tag_full')
+        try:
+            return self.web_ajax.search_artworks(
+                word, page=page, s_mode=s_mode, duration=duration)
+        except Exception as e:
+            write_log(f"Ajax search meta failed: {e}", 'warn')
+            return {}
 
     def follow_user(self, uid, restrict='public'):
         self.ensure_login()
@@ -1987,11 +2071,13 @@ class DownloadWorker:
                                  stage='fetching_text', progress=15)
 
         # Full text / 正文
-        try:
-            text_resp = self.api.api.novel_text(nid)
-            novel_text = text_resp.get('novel_text', '') if text_resp else ''
-        except Exception as e:
-            write_log(f"novel_text failed: {e}", 'error')
+        text_resp = self.api.get_novel_text(nid)
+        novel_text = ''
+        if text_resp:
+            novel_text = (text_resp.get('novel_text', '')
+                          or text_resp.get('text', ''))
+        if not novel_text:
+            write_log(f"novel_text empty for {nid}", 'warn')
             self._update_item_status(nid, status='failed',
                                      stage='text', error='text_fetch_failed')
             return False, nid, None, None
@@ -2225,6 +2311,38 @@ def format_user_detail(data, extra=None):
         result.update(extra)
     return result
 
+def format_novel(it):
+    user = it.get('user', {}) or {}
+    avatar = (user.get('profile_image_urls', {}) or {}).get('medium', '')
+    tags_out = []
+    for x in it.get('tags', []) or []:
+        if isinstance(x, dict):
+            name = x.get('name', '') or ''
+            trans = x.get('translated_name', '') or ''
+            tags_out.append(f"{name}({trans})" if trans else name)
+        elif isinstance(x, str):
+            tags_out.append(x)
+    series = it.get('series') or {}
+    return {
+        'id': it.get('id'),
+        'title': it.get('title', ''),
+        'author': user.get('name', ''),
+        'author_id': user.get('id'),
+        'author_account': user.get('account', ''),
+        'author_avatar': avatar,
+        'views': it.get('total_view', 0) or 0,
+        'bookmarks': it.get('total_bookmarks', 0) or 0,
+        'tags': tags_out,
+        'date': format_date(it.get('create_date', '') or ''),
+        'type': 'novel',
+        'text_length': it.get('text_length', 0) or 0,
+        'x_restrict': it.get('x_restrict', 0) or 0,
+        'ai_type': it.get('novel_ai_type', 0) or 0,
+        'series_id': series.get('id'),
+        'series_title': series.get('title', '') or '',
+        'is_bookmarked': bool(it.get('is_bookmarked')),
+    }
+
 
 def parse_bookmark_html(html):
     urls = []
@@ -2346,48 +2464,182 @@ async def handle_command(bridge, cmd, ws):
             duration = None
 
         def do_search():
-            results = []
             api = make_api(bridge)
             api.ensure_login()
-            for i in range(pages):
-                page = start_page + i
-                offset = (page - 1) * 30
-                bridge.broadcast({'type': 'search_progress',
-                                  'current': i + 1, 'total': pages,
-                                  'page': page})
-                try:
-                    resp = api.search_illust(
-                        tag, target=target, sort=sort, offset=offset,
-                        duration=duration,
-                        start_date=start_date, end_date=end_date)
-                except Exception as e:
-                    write_log(t('search_page_failed', page=page,
-                                error=str(e)), 'error')
-                    break
-                items = resp.get('illusts', [])
-                if not items:
-                    break
-                results.extend(items)
-                if len(items) < 30:
-                    break
-                time.sleep(float(
-                    bridge.config.get('api.request_delay', 0.3)))
-            filtered = []
-            for it in results:
-                ty = it.get('type', '')
-                if ty == 'illust' and filters.get('illust'):
-                    filtered.append(it)
-                elif ty == 'manga' and filters.get('manga'):
-                    filtered.append(it)
-            return filtered
 
-        results = await loop.run_in_executor(None, do_search)
-        formatted = [format_item(it) for it in results]
-        for i, f in enumerate(formatted):
-            f['_slim_illust'] = results[i]
+            f = filters or {}
+            want_illust = bool(f.get('illust', True))
+            want_manga = bool(f.get('manga', True))
+            want_ugoira = bool(f.get('ugoira', False))
+            want_novel = bool(f.get('novel', False))
+
+            write_log(
+                f"search '{tag}': filters illust={want_illust} "
+                f"manga={want_manga} ugoira={want_ugoira} novel={want_novel}, "
+                f"pages={pages} start_page={start_page}",
+                'info')
+
+            delay = float(bridge.config.get('api.request_delay', 0.3))
+
+            illust_raw = []
+            if want_illust or want_manga or want_ugoira:
+                write_log("search: entering App API loop", 'info')
+                for i in range(pages):
+                    page = start_page + i
+                    offset = (page - 1) * 30
+                    bridge.broadcast({'type': 'search_progress',
+                                      'current': i + 1, 'total': pages,
+                                      'page': page})
+                    try:
+                        resp = api.search_illust(
+                            tag, target=target, sort=sort, offset=offset,
+                            duration=duration,
+                            start_date=start_date, end_date=end_date)
+                    except Exception as e:
+                        write_log(t('search_page_failed', page=page,
+                                    error=str(e)), 'error')
+                        break
+                    items = resp.get('illusts', []) if resp else []
+                    write_log(
+                        f"search page {page}: got {len(items)} items",
+                        'info')
+                    if not items:
+                        break
+                    illust_raw.extend(items)
+                    if len(items) < 30:
+                        break
+                    time.sleep(delay)
+            else:
+                write_log("search: App API loop skipped", 'warn')
+
+            novel_raw = []
+            if want_novel:
+                for i in range(pages):
+                    page = start_page + i
+                    offset = (page - 1) * 30
+                    bridge.broadcast({'type': 'search_progress',
+                                      'current': i + 1, 'total': pages,
+                                      'page': page, 'kind': 'novel'})
+                    try:
+                        resp = api.search_novel(
+                            tag, target=target, sort=sort, offset=offset,
+                            duration=duration,
+                            start_date=start_date, end_date=end_date)
+                    except Exception as e:
+                        write_log(t('search_page_failed', page=page,
+                                    error=str(e)), 'error')
+                        break
+                    items = resp.get('novels', []) if resp else []
+                    write_log(
+                        f"search novel page {page}: got {len(items)} items",
+                        'info')
+                    if not items:
+                        break
+                    novel_raw.extend(items)
+                    if len(items) < 30:
+                        break
+                    time.sleep(delay)
+
+            illust_out = []
+            novel_out = []
+            for it in illust_raw:
+                ty = it.get('type', '')
+                if ty == 'illust' and want_illust:
+                    illust_out.append(it)
+                elif ty == 'manga' and want_manga:
+                    illust_out.append(it)
+                elif ty == 'ugoira' and want_ugoira:
+                    illust_out.append(it)
+            for it in novel_raw:
+                it.setdefault('type', 'novel')
+                novel_out.append(it)
+
+            total = None
+            related_tags = []
+            ajax_body = api.search_artworks_ajax(
+                tag, page=start_page, target=target, duration=duration)
+            if ajax_body:
+                im = ajax_body.get('illustManga') or {}
+                total = im.get('total')
+                rt = ajax_body.get('relatedTags') or []
+                related_tags = [x for x in rt if isinstance(x, str)]
+
+            write_log(
+                f"search done: illust={len(illust_out)} "
+                f"novel={len(novel_out)} total={total} "
+                f"related={len(related_tags)}",
+                'info')
+            return illust_out, novel_out, total, related_tags
+
+        try:
+            illust_raw, novel_raw, total, related_tags = \
+                await loop.run_in_executor(None, do_search)
+        except Exception as e:
+            write_log(f"search executor failed: {e}", 'error')
+            await ws.send_str(json.dumps(
+                {'type': 'error', 'msg': f'Search failed: {e}'}))
+            return
+
+        write_log("search: building item list", 'info')
+        try:
+            illust_items = [format_item(it) for it in illust_raw]
+            for i, f in enumerate(illust_items):
+                f['_slim_illust'] = illust_raw[i]
+            novel_items = [format_novel(it) for it in novel_raw]
+            for i, f in enumerate(novel_items):
+                f['_slim_illust'] = novel_raw[i]
+        except Exception as e:
+            write_log(f"search: format failed: {e}", 'error')
+            await ws.send_str(json.dumps(
+                {'type': 'error', 'msg': f'Format failed: {e}'}))
+            return
+        write_log(
+            f"search: built {len(illust_items)} illust + "
+            f"{len(novel_items)} novel", 'info')
+
+        payload = {
+            'type': 'search_result',
+            'items': illust_items,
+            'novel_items': novel_items,
+            'start_page': start_page, 'pages': pages,
+            'tag': tag, 'total': total,
+            'related_tags': related_tags,
+        }
+        try:
+            data = json.dumps(payload, ensure_ascii=False)
+        except Exception as e:
+            write_log(f"search: json.dumps failed: {e}", 'error')
+            await ws.send_str(json.dumps(
+                {'type': 'error', 'msg': f'JSON failed: {e}'}))
+            return
+        write_log(f"search: payload {len(data)} bytes, sending", 'info')
+
+        try:
+            await asyncio.wait_for(ws.send_str(data), timeout=15.0)
+        except asyncio.TimeoutError:
+            write_log(
+                "search: send_str TIMED OUT — client not consuming WS",
+                'error')
+            return
+        except Exception as e:
+            write_log(f"search: send_str failed: {e}", 'error')
+            return
+        write_log("search: sent", 'info')
+
+        illust_items = [format_item(it) for it in illust_raw]
+        for i, f in enumerate(illust_items):
+            f['_slim_illust'] = illust_raw[i]
+        novel_items = [format_novel(it) for it in novel_raw]
+        for i, f in enumerate(novel_items):
+            f['_slim_illust'] = novel_raw[i]
+
         await ws.send_str(json.dumps({
-            'type': 'search_result', 'items': formatted,
-            'start_page': start_page, 'pages': pages},
+            'type': 'search_result',
+            'items': illust_items,
+            'novel_items': novel_items,
+            'start_page': start_page, 'pages': pages,
+            'tag': tag, 'total': total,
+            'related_tags': related_tags},
             ensure_ascii=False))
 
     # ---------- Ranking ----------
@@ -2601,6 +2853,89 @@ async def handle_command(bridge, cmd, ws):
             'type': 'user_detail_result',
             'user': user_info, 'items': items}, ensure_ascii=False))
 
+    elif c == 'novel_detail':
+        try:
+            nid = int(cmd.get('id'))
+        except (TypeError, ValueError):
+            await ws.send_str(json.dumps(
+                {'type': 'error', 'msg': 'Invalid novel id'}))
+            return
+        loop = asyncio.get_event_loop()
+
+        def do_novel():
+            api = make_api(bridge)
+            api.ensure_login()
+            detail = api.get_novel_detail(nid)
+            text_resp = api.get_novel_text(nid) if detail else {}
+            return detail, text_resp
+
+        try:
+            detail, text_resp = await loop.run_in_executor(None, do_novel)
+        except Exception as e:
+            await ws.send_str(json.dumps(
+                {'type': 'error', 'msg': f'Novel detail failed: {e}'}))
+            return
+        if not detail:
+            await ws.send_str(json.dumps(
+                {'type': 'error', 'msg': 'Novel not found'}))
+            return
+
+        text = text_resp.get('novel_text', '') or text_resp.get('text', '')
+        series_nav = text_resp.get('seriesNavigation', {}) or {}
+        prev_nav = series_nav.get('prevNovel') or {}
+        next_nav = series_nav.get('nextNovel') or {}
+
+        payload = format_novel(detail)
+        payload['text'] = text
+        payload['caption'] = (detail.get('caption', '')
+                              or text_resp.get('caption', ''))
+        payload['series_title'] = (payload.get('series_title')
+                                   or text_resp.get('seriesTitle', ''))
+        payload['series_id'] = (payload.get('series_id')
+                                or (int(text_resp['seriesId'])
+                                    if text_resp.get('seriesId') else None))
+        payload['prev_novel'] = (
+            {'id': prev_nav.get('id'), 'title': prev_nav.get('title', '')}
+            if prev_nav.get('id') else None)
+        payload['next_novel'] = (
+            {'id': next_nav.get('id'), 'title': next_nav.get('title', '')}
+            if next_nav.get('id') else None)
+
+        await ws.send_str(json.dumps(
+            {'type': 'novel_detail_result', 'novel': payload},
+            ensure_ascii=False))
+
+    elif c == 'novel_series':
+        try:
+            series_id = int(cmd.get('series_id'))
+        except (TypeError, ValueError):
+            await ws.send_str(json.dumps(
+                {'type': 'error', 'msg': 'Invalid series id'}))
+            return
+        loop = asyncio.get_event_loop()
+
+        def do_series():
+            api = make_api(bridge)
+            api.ensure_login()
+            return api.get_novel_series(series_id)
+
+        try:
+            resp = await loop.run_in_executor(None, do_series)
+        except Exception as e:
+            await ws.send_str(json.dumps(
+                {'type': 'error', 'msg': f'Novel series failed: {e}'}))
+            return
+        novels = (resp.get('novel_series')
+                  or resp.get('novels')
+                  or []) if resp else []
+        items = []
+        for n in novels:
+            f = format_novel(n)
+            items.append(f)
+        await ws.send_str(json.dumps({
+            'type': 'novel_series_result',
+            'series_id': series_id,
+            'items': items}, ensure_ascii=False))
     # ---------- Follow / Unfollow ----------
     elif c == 'follow_user':
         uid = int(cmd.get('uid'))
@@ -2995,12 +3330,13 @@ async def handle_command(bridge, cmd, ws):
             api = make_api(bridge)
             api.ensure_login()
             results = []
-            offset = 0
+            max_bookmark_id = None
             delay = float(bridge.config.get('api.request_delay', 0.3))
             for _ in range(10):
                 try:
                     resp = api.get_user_bookmarks(
-                        uid_self, restrict='public', offset=offset)
+                        uid_self, restrict='public',
+                        max_bookmark_id=max_bookmark_id)
                 except Exception as e:
                     write_log(f"load_bookmarks failed: {e}", 'error')
                     break
@@ -3011,8 +3347,17 @@ async def handle_command(bridge, cmd, ws):
                     f = format_item(it)
                     f['_slim_illust'] = it
                     results.append(f)
-                offset += 30
-                if not resp.get('next_url'):
+
+                next_url = resp.get('next_url')
+                if not next_url:
+                    break
+                try:
+                    params = parse_qs(urlparse(next_url).query)
+                    v = params.get('max_bookmark_id', [None])[0]
+                    max_bookmark_id = int(v) if v is not None else None
+                except (ValueError, TypeError):
+                    max_bookmark_id = None
+                if max_bookmark_id is None:
                     break
                 time.sleep(delay)
             return results

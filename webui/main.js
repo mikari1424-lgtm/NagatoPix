@@ -7,19 +7,27 @@ const filterSets = {
     "udetail-tag-cloud": new Set(),
     "follow-tag-cloud": new Set(),
     "follow-author-cloud": new Set(),
+    "search-tag-all-cloud": new Set(),
 };
 
 let parsedBookmarkUrls = [];
 let rankingItems = [],
     rankingItemsAll = [];
-let searchItems = [],
-    searchItemsRaw = [],
-    userSearchItems = [];
+let searchIllustItems = [],
+    searchIllustItemsRaw = [];
+let searchNovelItems = [],
+    searchNovelItemsRaw = [];
+let searchActivePane = "illust";
+let searchCurrentTag = "";
+let searchTotal = 0;
+let searchRelatedTags = [];
+let userSearchItems = [];
 let recommendItems = [],
     followItems = [],
     followItemsAll = [];
 let userDetailItems = [],
     userDetailAllItems = [];
+let followingItems = [];
 let userDetailUid = null;
 let currentUserDetail = null;
 let currentAccounts = [];
@@ -49,9 +57,23 @@ let ivState = {
     pageIdx: 0,
 };
 
+let nvState = {
+    novel: null,
+    prev: null,
+    next: null,
+    seriesId: null,
+    seriesTitle: "",
+};
+let nsState = {
+    seriesId: null,
+    items: [],
+    currentId: null,
+};
+
 const tableItemGetters = {
     "ranking-list": () => rankingItems,
-    "search-list": () => searchItems,
+    "search-list-illust": () => searchIllustItems,
+    "search-list-novel": () => searchNovelItems,
     "recommend-list": () => recommendItems,
     "follow-list": () => followItems,
     "user-detail-list": () => userDetailItems,
@@ -81,10 +103,28 @@ function connect() {
     };
     ws.onerror = () => {};
     ws.onmessage = (ev) => {
+        let msg;
         try {
-            handleMessage(JSON.parse(ev.data));
+            msg = JSON.parse(ev.data);
         } catch (e) {
-            console.error(e);
+            console.error("WS JSON parse failed:", e);
+            return;
+        }
+        if (msg.type === "search_result") {
+            console.log(
+                "SEARCH_RESULT received:",
+                "illust=",
+                (msg.items || []).length,
+                "novel=",
+                (msg.novel_items || []).length,
+                "tag=",
+                msg.tag,
+            );
+        }
+        try {
+            handleMessage(msg);
+        } catch (e) {
+            console.error("WS HANDLE ERROR on type=" + msg.type, e);
         }
     };
 }
@@ -120,7 +160,15 @@ function handleMessage(msg) {
             break;
 
         case "search_result":
-            renderSearchResults(msg.items, msg.start_page, msg.pages);
+            renderSearchResults(
+                msg.items,
+                msg.novel_items,
+                msg.start_page,
+                msg.pages,
+                msg.total,
+                msg.related_tags,
+                msg.tag,
+            );
             break;
         case "search_progress":
             setSearchLoading(
@@ -258,6 +306,12 @@ function handleMessage(msg) {
             break;
         case "bookmarks_list":
             renderBookmarksList(msg.items);
+            break;
+        case "novel_detail_result":
+            renderNovelDetail(msg.novel);
+            break;
+        case "novel_series_result":
+            renderNovelSeries(msg.items);
             break;
     }
 }
@@ -502,15 +556,27 @@ function setEl(id, fn) {
 // ============ Selection / 选择 ============
 function getActiveTab() {
     const active = document.querySelector("nav button.active");
-    return active ? active.dataset.tab : null;
+    if (active) return active.dataset.tab;
+    const searchTab = document.getElementById("tab-search");
+    if (searchTab && searchTab.classList.contains("active")) return "search";
+    return null;
 }
 
 function getSelectionInfo() {
     const tab = getActiveTab();
     if (tab === "ranking")
         return { containerId: "ranking-list", items: rankingItems };
-    if (tab === "search")
-        return { containerId: "search-list", items: searchItems };
+        if (tab === "search") {
+            if (searchActivePane === "novel")
+                return {
+                    containerId: "search-list-novel",
+                    items: searchNovelItems,
+                };
+            return {
+                containerId: "search-list-illust",
+                items: searchIllustItems,
+            };
+        }
     if (tab === "recommend")
         return { containerId: "recommend-list", items: recommendItems };
     if (tab === "follow")
@@ -556,9 +622,12 @@ function enqueueSelected(containerId, items) {
     if (!selected.length) return toast(t("toast_no_select"), "error");
 
     const payload = selected.map((it) => {
-        const entry = { url: `https://www.pixiv.net/artworks/${it.id}` };
+        const url =
+            it.type === "novel"
+                ? `https://www.pixiv.net/novel/show.php?id=${it.id}`
+                : `https://www.pixiv.net/artworks/${it.id}`;
         if (it._slim_illust) entry.metadata = { illust: it._slim_illust };
-        return entry;
+        return url;
     });
     send({ cmd: "add_items", items: payload });
 
@@ -583,9 +652,25 @@ const WORK_COLUMNS = [
     { key: "date", get: "th_date", numeric: false },
 ];
 
+const USER_COLUMNS = [
+    { key: "id", get: "th_uid", numeric: true },
+    { key: "name", get: "th_name", numeric: false },
+    { key: "account", get: "th_account", numeric: false },
+    { key: "is_followed", get: "th_followed", numeric: false },
+];
+
 const TABLE_COLUMNS = {
     "ranking-list": WORK_COLUMNS,
-    "search-list": WORK_COLUMNS,
+    "search-list-illust": WORK_COLUMNS,
+    "search-list-novel": [
+        { key: "id", get: "th_pid", numeric: true },
+        { key: "title", get: "th_title", numeric: false },
+        { key: "author", get: "th_author", numeric: false },
+        { key: "views", get: "th_views", numeric: true },
+        { key: "bookmarks", get: "th_bookmarks", numeric: true },
+        { key: "tags", get: "th_tags", numeric: false },
+        { key: "date", get: "th_date", numeric: false },
+    ],
     "recommend-list": WORK_COLUMNS,
     "follow-list": WORK_COLUMNS,
     "user-detail-list": [
@@ -601,7 +686,8 @@ const TABLE_COLUMNS = {
 
 const sortState = {
     "ranking-list": { col: null, asc: true },
-    "search-list": { col: null, asc: true },
+    "search-list-illust": { col: null, asc: true },
+    "search-list-novel": { col: null, asc: true },
     "recommend-list": { col: null, asc: true },
     "follow-list": { col: null, asc: true },
     "user-detail-list": { col: null, asc: true },
@@ -612,7 +698,15 @@ function getSortValue(item, key) {
         case "id":
             return item.id || 0;
         case "title":
-            return (item.title || "").toLowerCase();
+            if (it.type === "novel") {
+                tds += `<td data-col="title">
+                                <a href="#" class="illust-title-link"
+                                   data-action="open-novel" data-idx="${idx}"
+                                   title="${t("iv_open_pixiv")}">${escapeHtml(truncate(it.title || "", 40))}</a>${badges}</td>`;
+            } else {
+                tds += `<td data-col="title">${titleHtml}</td>`;
+            }
+            break;
         case "page_count":
             return item.page_count || 1;
         case "author":
@@ -627,6 +721,12 @@ function getSortValue(item, key) {
             return (item.tags || []).join(",").toLowerCase();
         case "date":
             return item.date || "";
+        case "name":
+            return (item.name || "").toLowerCase();
+        case "account":
+            return (item.account || "").toLowerCase();
+        case "is_followed":
+            return item.is_followed ? 1 : 0;
         default:
             return "";
     }
@@ -674,7 +774,17 @@ function applySort(containerId) {
 // ============ Table render ============
 function renderTable(containerId, items) {
     const container = document.getElementById(containerId);
-    if (!container) return;
+    if (!container) {
+        console.warn("renderTable: container not found:", containerId);
+        return;
+    }
+    if (!TABLE_COLUMNS[containerId]) {
+        console.error("renderTable: missing TABLE_COLUMNS entry:", containerId);
+        return;
+    }
+    if (!sortState[containerId]) {
+        sortState[containerId] = { col: null, asc: true };
+    }
 
     if (!items.length) {
         container.innerHTML = `<div class="empty-msg">${t("no_result")}</div>`;
@@ -682,7 +792,6 @@ function renderTable(containerId, items) {
         return;
     }
 
-    // Preserve selected PIDs
     const selectedPids = new Set();
     container.querySelectorAll("tr.selected").forEach((tr) => {
         const idTd = tr.querySelector('td[data-col="id"]');
@@ -730,11 +839,17 @@ function renderTable(containerId, items) {
                 )
                 .join("");
 
-            const titleHtml = `<a href="#" class="illust-title-link"
-            data-action="open-illust"
-            data-container="${containerId}"
-            data-idx="${idx}"
-            title="${t("iv_open_pixiv")}">${escapeHtml(truncate(it.title || "", 40))}</a>${badges}`;
+            const titleHtml =
+                it.type === "novel"
+                    ? `<a href="#" class="illust-title-link"
+                       data-action="open-novel"
+                       data-idx="${idx}"
+                       title="${t("iv_open_pixiv")}">${escapeHtml(truncate(it.title || "", 40))}</a>${badges}`
+                    : `<a href="#" class="illust-title-link"
+                       data-action="open-illust"
+                       data-container="${containerId}"
+                       data-idx="${idx}"
+                       title="${t("iv_open_pixiv")}">${escapeHtml(truncate(it.title || "", 40))}</a>${badges}`;
 
             let tds = `<td class="col-checkbox">
             <img class="row-checkbox"
@@ -871,6 +986,14 @@ document.addEventListener(
             onTagClick(e, target);
             return;
         }
+        if (action === "open-novel") {
+            e.preventDefault();
+            e.stopPropagation();
+            const idx = parseInt(target.dataset.idx, 10);
+            const it = searchNovelItems[idx];
+            if (it) openNovelViewer(it.id);
+            return;
+        }
     },
     true,
 );
@@ -900,22 +1023,24 @@ function onTagClick(evt, el) {
 }
 
 // ============ Nav ============
+function switchTab(tabName) {
+    document
+        .querySelectorAll("nav button")
+        .forEach((b) => b.classList.remove("active"));
+    document
+        .querySelectorAll(".tab")
+        .forEach((t) => t.classList.remove("active"));
+    const navBtn = document.querySelector(`nav button[data-tab="${tabName}"]`);
+    if (navBtn) navBtn.classList.add("active");
+    const tabEl = document.getElementById("tab-" + tabName);
+    if (tabEl) tabEl.classList.add("active");
+    applyUserBgVisibility();
+    updateSelectionCount();
+    scheduleUiStateSave();
+}
+
 document.querySelectorAll("nav button").forEach((btn) => {
-    btn.onclick = () => {
-        document
-            .querySelectorAll("nav button")
-            .forEach((b) => b.classList.remove("active"));
-        document
-            .querySelectorAll(".tab")
-            .forEach((t) => t.classList.remove("active"));
-        btn.classList.add("active");
-        document
-            .getElementById("tab-" + btn.dataset.tab)
-            .classList.add("active");
-        applyUserBgVisibility();
-        updateSelectionCount();
-        scheduleUiStateSave();
-    };
+    btn.onclick = () => switchTab(btn.dataset.tab);
 });
 
 // ============ Search ============
@@ -940,22 +1065,35 @@ function onDurationChange() {
 }
 
 function doSearch() {
-    const tag = document.getElementById("search-tag").value.trim();
+    const tagInput = document.getElementById("search-tag");
+    const tag = (tagInput?.value || "").trim();
     if (!tag) return toast(t("toast_need_tag"), "error");
-    const sort = document.getElementById("search-sort").value;
-    const target = document.getElementById("search-target").value;
-    const durationRaw = document.getElementById("search-duration").value;
+
+    const sort = document.getElementById("search-sort")?.value || "date_desc";
+    const target =
+        document.getElementById("search-target")?.value ||
+        "exact_match_for_tags";
+    const durationRaw = document.getElementById("search-duration")?.value || "";
     const startPage =
-        parseInt(document.getElementById("search-page").value) || 1;
-    const pages = parseInt(document.getElementById("search-pages").value) || 1;
-    const fIllust = document.getElementById("search-type-illust").checked;
-    const fManga = document.getElementById("search-type-manga").checked;
-    if (!fIllust && !fManga) return toast(t("toast_need_type"), "error");
+        parseInt(document.getElementById("search-page")?.value) || 1;
+    const pages = parseInt(document.getElementById("search-pages")?.value) || 1;
+
+    const fIllust =
+        document.getElementById("search-type-illust")?.checked ?? true;
+    const fManga =
+        document.getElementById("search-type-manga")?.checked ?? true;
+    const fUgoira =
+        document.getElementById("search-type-ugoira")?.checked ?? false;
+    const fNovel =
+        document.getElementById("search-type-novel")?.checked ?? false;
+
+    if (!fIllust && !fManga && !fUgoira && !fNovel)
+        return toast(t("toast_need_type"), "error");
 
     let duration, start_date, end_date;
     if (durationRaw === "custom") {
-        start_date = document.getElementById("search-start-date").value || "";
-        end_date = document.getElementById("search-end-date").value || "";
+        start_date = document.getElementById("search-start-date")?.value || "";
+        end_date = document.getElementById("search-end-date")?.value || "";
         if (!start_date || !end_date)
             return toast(t("toast_need_dates"), "error");
         if (start_date > end_date) return toast(t("toast_date_order"), "error");
@@ -963,13 +1101,17 @@ function doSearch() {
         duration = durationRaw;
     }
 
-    setSearchLoading(
-        t(
-            "status_requesting",
-            `${tag} | ${startPage}→${startPage + pages - 1}`,
-        ),
+    switchTab("search");
+
+    // 加载态：直接写进新容器
+    setEl(
+        "search-list-illust",
+        (el) =>
+            (el.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_search")}</div>`),
     );
-    document.getElementById("btn-search").disabled = true;
+    setEl("search-list-novel", (el) => (el.innerHTML = ""));
+    setEl("search-pane-tabs", (el) => (el.style.display = "none"));
+    setEl("search-header-card", (el) => (el.style.display = "none"));
 
     send({
         cmd: "search",
@@ -981,84 +1123,295 @@ function doSearch() {
         end_date: end_date || "",
         start_page: startPage,
         pages,
-        filters: { illust: fIllust, manga: fManga },
+        filters: {
+            illust: fIllust,
+            manga: fManga,
+            ugoira: fUgoira,
+            novel: fNovel,
+        },
     });
 }
 
 function setSearchLoading(text) {
     setEl(
-        "search-list",
+        "search-list-illust",
         (el) =>
             (el.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_search")}</div>`),
     );
-    setEl("search-status", (el) => (el.textContent = text));
+    setEl("search-list-novel", (el) => (el.innerHTML = ""));
 }
 
-function renderSearchResults(items, startPage, pages) {
-    searchItemsRaw = items;
+function switchSearchPane(pane) {
+    if (pane !== "illust" && pane !== "novel") return;
+    searchActivePane = pane;
+
+    document
+        .querySelectorAll(".search-pane-tab")
+        .forEach((b) => b.classList.remove("active"));
+    document
+        .querySelectorAll(".search-result-pane")
+        .forEach((p) => p.classList.remove("active"));
+
+    const tabBtn = document.getElementById(`search-pane-tab-${pane}`);
+    const tabEl = document.getElementById(`search-result-pane-${pane}`);
+    if (tabBtn) tabBtn.classList.add("active");
+    if (tabEl) tabEl.classList.add("active");
+
+    setEl(
+        "search-tag-toggle-hot",
+        (el) => (el.style.display = pane === "novel" ? "none" : ""),
+    );
+    if (pane === "novel") {
+        setEl("search-tag-hot-wrap", (el) => (el.style.display = "none"));
+        setEl("search-header-total", (el) => (el.textContent = ""));
+    } else {
+        updateSearchHeaderTotal();
+    }
+
+    buildTagCloud(
+        "search-tag-all-cloud",
+        pane === "novel" ? searchNovelItemsRaw : searchIllustItemsRaw,
+        "applySearchTagFilter",
+    );
+    updateSelectionCount();
+    scheduleUiStateSave();
+}
+
+function renderSearchResults(
+    items,
+    novelItems,
+    startPage,
+    pages,
+    total,
+    relatedTags,
+    tag,) 
+    {
+    searchIllustItemsRaw = items || [];
+    searchNovelItemsRaw = novelItems || [];
+    searchCurrentTag = tag || "";
+    searchTotal = total || 0;
+    searchRelatedTags = relatedTags || [];
+
+    // 清掉上一次搜索残留的标签云筛选，避免新结果被旧 chip 过滤成空
+    if (filterSets["search-tag-all-cloud"]) {
+        filterSets["search-tag-all-cloud"].clear();
+    }
+
+    searchActivePane = searchIllustItemsRaw.length ? "illust" : "novel";
+
+    renderSearchHeaderCard();
+    switchSearchPane(searchActivePane);
     applySearchBookmarkFilter(startPage, pages);
 }
 
-function applySearchBookmarkFilter(startPage, pages) {
-    const bmMin = parseInt(document.getElementById("search-bm-min").value) || 0;
-    const bmMax = parseInt(document.getElementById("search-bm-max").value) || 0;
+function renderSearchHeaderCard() {
+    const card = document.getElementById("search-header-card");
+    if (!card) return;
 
-    let filtered = searchItemsRaw;
-    if (bmMin > 0 || bmMax > 0) {
-        filtered = searchItemsRaw.filter((it) => {
-            const bm = it.bookmarks || 0;
-            if (bmMin > 0 && bm < bmMin) return false;
-            if (bmMax > 0 && bm > bmMax) return false;
-            return true;
-        });
+    const mode = document.getElementById("search-mode")?.value;
+    if (mode !== "illust" || !searchCurrentTag) {
+        card.style.display = "none";
+        return;
+    }
+    card.style.display = "";
+
+    setEl(
+        "search-header-title-text",
+        (el) => (el.textContent = searchCurrentTag),
+    );
+
+    setEl("search-tag-hot-wrap", (el) => (el.style.display = "none"));
+    setEl("search-tag-all-wrap", (el) => (el.style.display = "none"));
+    document
+        .querySelectorAll(".search-tag-toggle")
+        .forEach((b) => b.classList.remove("expanded"));
+
+    buildHotTagCloud("search-tag-hot-cloud", searchRelatedTags);
+    buildTagCloud(
+        "search-tag-all-cloud",
+        searchActivePane === "novel"
+            ? searchNovelItemsRaw
+            : searchIllustItemsRaw,
+        "applySearchTagFilter",
+    );
+
+    updateSearchHeaderTotal();
+}
+
+function updateSearchHeaderTotal() {
+    setEl("search-header-total", (el) => {
+        if (searchActivePane === "novel") {
+            const n = searchNovelItemsRaw.length;
+            el.textContent = n ? t("search_total_novel", formatNum(n)) : "";
+        } else {
+            el.textContent = searchTotal
+                ? t("search_total", formatNum(searchTotal))
+                : "";
+        }
+    });
+}
+
+function buildHotTagCloud(containerId, tags) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    if (!tags || !tags.length) {
+        container.innerHTML = `<div class="empty-msg" style="padding:8px">${t("no_result")}</div>`;
+        return;
+    }
+    container.innerHTML = tags
+        .map(
+            (tag) => `<span class="tag-chip" data-tag="${escapeHtml(tag)}"
+            onclick="onHotTagClick(event, this)">${escapeHtml(tag)}</span>`,
+        )
+        .join("");
+}
+
+function onHotTagClick(evt, el) {
+    if (evt) evt.stopPropagation();
+    const tag = el.dataset.tag || "";
+    if (!tag) return;
+    setEl("search-tag", (input) => (input.value = tag));
+    doSearchFromTopbar();
+}
+
+function toggleSearchTagCloud(which, btn) {
+    const hotWrap = document.getElementById("search-tag-hot-wrap");
+    const allWrap = document.getElementById("search-tag-all-wrap");
+    const buttons = document.querySelectorAll(".search-tag-toggle");
+
+    const targetWrap = which === "hot" ? hotWrap : allWrap;
+    const otherWrap = which === "hot" ? allWrap : hotWrap;
+    if (!targetWrap) return;
+
+    // 只有明确的 "none" 才算收起；其余（"" 或未设值）视作展开
+    const isOpen = targetWrap.style.display !== "none";
+
+    if (isOpen) {
+        // 点已展开的按钮 → 收起
+        targetWrap.style.display = "none";
+        buttons.forEach((b) => b.classList.remove("expanded"));
+        return;
     }
 
-    searchItems = filtered;
-    renderTable("search-list", filtered);
-    document.getElementById("btn-search").disabled = false;
+    // 打开自己，关掉另一个
+    if (otherWrap) otherWrap.style.display = "none";
+    buttons.forEach((b) => b.classList.remove("expanded"));
+    targetWrap.style.display = "";
+    if (btn) btn.classList.add("expanded");
+}
+
+function applySearchTagFilter() {
+    applySearchBookmarkFilter();
+}
+
+function applySearchBookmarkFilter(startPage, pages) {
+    const bmMinEl = document.getElementById("search-bm-min");
+    const bmMaxEl = document.getElementById("search-bm-max");
+    const bmMin = bmMinEl ? parseInt(bmMinEl.value) || 0 : 0;
+    const bmMax = bmMaxEl ? parseInt(bmMaxEl.value) || 0 : 0;
+
+    const chipTags = [...(filterSets["search-tag-all-cloud"] || [])].map((x) =>
+        x.toLowerCase(),
+    );
+
+    const runFilter = (raw) => {
+        let out = raw || [];
+        if (bmMin > 0 || bmMax > 0) {
+            out = out.filter((it) => {
+                const bm = it.bookmarks || 0;
+                if (bmMin > 0 && bm < bmMin) return false;
+                if (bmMax > 0 && bm > bmMax) return false;
+                return true;
+            });
+        }
+        if (chipTags.length) {
+            out = out.filter((it) => {
+                const s = (it.tags || []).join(" ").toLowerCase();
+                return chipTags.every((k) => s.includes(k));
+            });
+        }
+        return out;
+    };
+
+    searchIllustItems = runFilter(searchIllustItemsRaw);
+    searchNovelItems = runFilter(searchNovelItemsRaw);
+
+    renderTable("search-list-illust", searchIllustItems);
+    renderTable("search-list-novel", searchNovelItems);
+
+    updateSearchHeaderTotal();
 
     if (startPage !== undefined && pages !== undefined) {
-        const suffix =
-            filtered.length !== searchItemsRaw.length
-                ? ` (filtered ${filtered.length}/${searchItemsRaw.length})`
-                : "";
-        setEl(
-            "search-status",
-            (el) =>
-                (el.textContent =
-                    t("status_done_search", startPage, pages, filtered.length) +
-                    suffix),
-        );
-        toast(t("toast_search_done", filtered.length), "success");
-    } else {
-        const total = searchItemsRaw.length;
-        const shown = filtered.length;
-        setEl(
-            "search-status",
-            (el) =>
-                (el.textContent =
-                    bmMin > 0 || bmMax > 0
-                        ? t("status_filter", shown, total)
-                        : t("status_done", total)),
-        );
+        const totalVisible = searchIllustItems.length + searchNovelItems.length;
+        toast(t("toast_search_done", totalVisible), "success");
     }
 }
 
+function doSearchFromTopbar() {
+    closeSearchSettings();
+    const mode = document.getElementById("search-mode").value;
+    if (mode === "user") doUserSearch();
+    else doSearch();
+}
+
+function onSearchModeChange() {
+    const mode = document.getElementById("search-mode").value;
+    setEl(
+        "search-settings-illust",
+        (el) => (el.style.display = mode === "illust" ? "" : "none"),
+    );
+    setEl(
+        "search-settings-user",
+        (el) => (el.style.display = mode === "user" ? "" : "none"),
+    );
+    if (mode !== "illust") {
+        setEl("search-header-card", (el) => (el.style.display = "none"));
+    } else if (searchCurrentTag) {
+        setEl("search-header-card", (el) => (el.style.display = ""));
+    }
+}
+
+function openSearchSettings() {
+    const mode = document.getElementById("search-mode").value;
+    setEl(
+        "search-settings-illust",
+        (el) => (el.style.display = mode === "illust" ? "" : "none"),
+    );
+    setEl(
+        "search-settings-user",
+        (el) => (el.style.display = mode === "user" ? "" : "none"),
+    );
+    document.getElementById("search-settings-modal").classList.add("show");
+}
+
+function closeSearchSettings() {
+    document.getElementById("search-settings-modal").classList.remove("show");
+}
+
 function doUserSearch() {
-    const word = document.getElementById("usearch-word").value.trim();
+    const word = document.getElementById("search-tag").value.trim();
     if (!word) return toast(t("toast_need_keyword"), "error");
     const page = parseInt(document.getElementById("usearch-page").value) || 1;
     const offset = (page - 1) * 30;
 
+    switchTab("search");
+
+    // 隐藏作品搜索专属组件
+    setEl("search-header-card", (el) => (el.style.display = "none"));
+    setEl("search-pane-tabs", (el) => (el.style.display = "none"));
+
+    // 强制切到插画面板作为用户结果的载体
+    searchActivePane = "illust";
+    document
+        .querySelectorAll(".search-result-pane")
+        .forEach((p) => p.classList.remove("active"));
+    setEl("search-result-pane-illust", (el) => el.classList.add("active"));
+    setEl("search-result-pane-novel", (el) => el.classList.remove("active"));
+
     setEl(
-        "search-list",
+        "search-list-illust",
         (el) =>
             (el.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_usearch")}</div>`),
-    );
-    setEl("btn-user-search", (el) => (el.disabled = true));
-    setEl(
-        "usearch-status",
-        (el) => (el.textContent = t("status_requesting", word)),
     );
 
     send({ cmd: "search_users", word, offset });
@@ -1066,7 +1419,7 @@ function doUserSearch() {
 
 function renderUserSearchResults(items) {
     userSearchItems = items;
-    const container = document.getElementById("search-list");
+    const container = document.getElementById("search-list-illust");
     if (!container) return;
 
     if (!items.length) {
@@ -1094,7 +1447,6 @@ function renderUserSearchResults(items) {
         </table>`;
     }
 
-    setEl("btn-user-search", (el) => (el.disabled = false));
     setEl(
         "usearch-status",
         (el) => (el.textContent = t("status_done", items.length)),
@@ -1747,6 +2099,157 @@ function renderIllustViewer() {
     renderIvActions(it);
 }
 
+function openNovelViewer(nid) {
+    nvState.novel = null;
+    setEl("nv-title", (el) => (el.textContent = "..."));
+    setEl("nv-meta", (el) => (el.innerHTML = ""));
+    setEl("nv-series", (el) => (el.innerHTML = ""));
+    setEl("nv-tags", (el) => (el.innerHTML = ""));
+    setEl(
+        "nv-text",
+        (el) =>
+            (el.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_novel")}</div>`),
+    );
+    setEl("nv-prev", (el) => (el.disabled = true));
+    setEl("nv-next", (el) => (el.disabled = true));
+    setEl("nv-series-btn", (el) => (el.disabled = true));
+    document.getElementById("novel-viewer-modal").classList.add("show");
+    send({ cmd: "novel_detail", id: nid });
+}
+
+function closeNovelViewer() {
+    document.getElementById("novel-viewer-modal").classList.remove("show");
+    closeNovelSeries();
+}
+
+function renderNovelDetail(novel) {
+    nvState.novel = novel;
+    nvState.prev = novel.prev_novel || null;
+    nvState.next = novel.next_novel || null;
+    nvState.seriesId = novel.series_id || null;
+    nvState.seriesTitle = novel.series_title || "";
+
+    const titleEl = document.getElementById("nv-title");
+    if (titleEl) {
+        titleEl.textContent = novel.title || "";
+        titleEl.href = `https://www.pixiv.net/novel/show.php?id=${novel.id}`;
+        titleEl.title = t("iv_open_pixiv");
+    }
+
+    const metaParts = [];
+    if (novel.author) {
+        if (novel.author_id) {
+            metaParts.push(
+                `<a href="#" class="user-link" data-action="open-user" data-uid="${novel.author_id}">${escapeHtml(novel.author)}</a>`,
+            );
+        } else {
+            metaParts.push(escapeHtml(novel.author));
+        }
+    }
+    if (novel.date) metaParts.push(escapeHtml(novel.date));
+    if (novel.views)
+        metaParts.push(`${t("th_views")}: ${formatNum(novel.views)}`);
+    if (novel.bookmarks)
+        metaParts.push(`${t("th_bookmarks")}: ${formatNum(novel.bookmarks)}`);
+    if (novel.text_length)
+        metaParts.push(`${t("novel_chars")}: ${formatNum(novel.text_length)}`);
+    setEl("nv-meta", (el) => (el.innerHTML = metaParts.join(" · ")));
+
+    if (novel.series_id) {
+        setEl(
+            "nv-series",
+            (el) =>
+                (el.innerHTML = `${t("novel_series_label")}: <a href="#" onclick="event.preventDefault(); openNovelSeries(); return false;">${escapeHtml(novel.series_title || "")}</a>`),
+        );
+    } else {
+        setEl("nv-series", (el) => (el.innerHTML = ""));
+    }
+
+    setEl("nv-tags", (el) => {
+        el.innerHTML = (novel.tags || [])
+            .map(
+                (tag) =>
+                    `<span class="tag tag-clickable" data-action="tag-search" data-tag="${escapeHtml(tag)}">${escapeHtml(tag)}</span>`,
+            )
+            .join("");
+    });
+
+    setEl("nv-text", (el) => {
+        const text = novel.text || "";
+        el.innerHTML = text
+            ? escapeHtml(text).replace(/\n/g, "<br>")
+            : `<div class="empty-msg">${t("novel_no_text")}</div>`;
+    });
+
+    setEl("nv-prev", (el) => (el.disabled = !nvState.prev));
+    setEl("nv-next", (el) => (el.disabled = !nvState.next));
+    setEl("nv-series-btn", (el) => (el.disabled = !nvState.seriesId));
+}
+
+function novelViewerPrev() {
+    if (nvState.prev && nvState.prev.id) openNovelViewer(nvState.prev.id);
+}
+
+function novelViewerNext() {
+    if (nvState.next && nvState.next.id) openNovelViewer(nvState.next.id);
+}
+
+function openNovelSeries() {
+    if (!nvState.seriesId) return;
+    nsState.seriesId = nvState.seriesId;
+    nsState.currentId = nvState.novel ? nvState.novel.id : null;
+    setEl(
+        "ns-title",
+        (el) =>
+            (el.textContent =
+                t("novel_series_title") +
+                (nvState.seriesTitle ? ` · ${nvState.seriesTitle}` : "")),
+    );
+    setEl(
+        "ns-list",
+        (el) =>
+            (el.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_novel_series")}</div>`),
+    );
+    document.getElementById("novel-series-modal").classList.add("show");
+    send({ cmd: "novel_series", series_id: nvState.seriesId });
+}
+
+function closeNovelSeries() {
+    document.getElementById("novel-series-modal").classList.remove("show");
+}
+
+function renderNovelSeries(items) {
+    nsState.items = items || [];
+    const container = document.getElementById("ns-list");
+    if (!container) return;
+    if (!nsState.items.length) {
+        container.innerHTML = `<div class="empty-msg">${t("no_result")}</div>`;
+        return;
+    }
+    container.innerHTML = nsState.items
+        .map((it, idx) => {
+            const isCurrent = it.id === nsState.currentId;
+            return `<div class="novel-series-item ${isCurrent ? "current" : ""}"
+                    onclick="onSeriesItemClick(${idx})">
+                <div class="novel-series-order">${idx + 1}</div>
+                <div class="novel-series-info">
+                    <div class="novel-series-name">${escapeHtml(it.title || "")}</div>
+                    <div class="novel-series-meta">
+                        ${escapeHtml(it.date || "")} · ${t("novel_chars")}: ${formatNum(it.text_length || 0)}
+                    </div>
+                </div>
+            </div>`;
+        })
+        .join("");
+}
+
+function onSeriesItemClick(idx) {
+    const it = nsState.items[idx];
+    if (!it || it.id === nsState.currentId) return;
+    closeNovelSeries();
+    openNovelViewer(it.id);
+}
+
 function renderIvUser(user, it) {
     const container = document.getElementById("iv-user-card");
     if (!container) return;
@@ -1807,9 +2310,12 @@ function toggleIllustBookmark() {
 function downloadCurrentIllust() {
     const it = ivState.items?.[ivState.idx];
     if (!it) return;
-    const entry = { url: `https://www.pixiv.net/artworks/${it.id}` };
+    const url =
+        it.type === "novel"
+            ? `https://www.pixiv.net/novel/show.php?id=${it.id}`
+            : `https://www.pixiv.net/artworks/${it.id}`;
     if (it._slim_illust) entry.metadata = { illust: it._slim_illust };
-    send({ cmd: "add_items", items: [entry] });
+    send({ cmd: "add_items", items: [url] });
     toast(t("toast_download_added"), "success");
 }
 
@@ -2214,86 +2720,16 @@ function renderAccountList(accounts, currentIndex) {
 }
 
 function renderFollowingList(items) {
-    const container = document.getElementById("following-list");
-    if (!container) return;
-    if (!items.length) {
-        container.innerHTML = `<div class="empty-msg">${t("no_result")}</div>`;
-        return;
-    }
-    const rows = items
-        .map((u) => {
-            const avatarHtml = u.avatar
-                ? `<img class="following-avatar"
-                    src="/proxy_image?url=${encodeURIComponent(u.avatar)}"
-                    alt=""
-                    onerror="this.onerror=null; this.removeAttribute('src');">`
-                : '<div class="following-avatar"></div>';
-            return `<tr>
-            <td style="width:44px">${avatarHtml}</td>
-            <td>${u.id || ""}</td>
-            <td><a href="#" data-action="open-user" data-uid="${u.id}"
-                   class="user-link">${escapeHtml(u.name || "")}</a></td>
-            <td style="color:var(--text-tertiary)">${escapeHtml(u.account || "")}</td>
-        </tr>`;
-        })
-        .join("");
-    container.innerHTML = `<table>
-        <thead><tr>
-            <th></th><th>${t("th_uid")}</th>
-            <th>${t("th_name")}</th><th>${t("th_account")}</th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-    </table>`;
+    followingItems = items;
+    renderTable("following-list", followingItems, {
+        selectable: false,
+        avatarField: "avatar",
+    });
 }
 
 function renderBookmarksList(items) {
     if (currentAccountProfile) currentAccountProfile.bookmarks = items;
-    const container = document.getElementById("account-bookmarks");
-    if (!container) return;
-    if (!items.length) {
-        container.innerHTML = `<div class="empty-msg">${t("no_result")}</div>`;
-        return;
-    }
-    const rows = items
-        .map((it, idx) => {
-            let badges = "";
-            if (it.ai_generated) badges += '<span class="badge ai">AI</span>';
-            if (it.restriction) {
-                const cls = it.restriction.toLowerCase().replace("-", "");
-                badges += `<span class="badge ${cls}">${it.restriction}</span>`;
-            }
-            const titleHtml = `<a href="#" class="illust-title-link"
-            data-action="open-illust"
-            data-container="account-bookmarks"
-            data-idx="${idx}"
-            title="${t("iv_open_pixiv")}">${escapeHtml(truncate(it.title || "", 40))}</a>${badges}`;
-            const tagsHtml = (it.tags || [])
-                .slice(0, 5)
-                .map(
-                    (tag) =>
-                        `<span class="tag tag-clickable" data-action="tag-search"
-                   data-tag="${escapeHtml(tag)}">${escapeHtml(tag)}</span>`,
-                )
-                .join("");
-            return `<tr>
-            <td>${it.id}</td>
-            <td>${titleHtml}</td>
-            <td>${it.page_count || 1}</td>
-            <td>${escapeHtml(it.author || "")}</td>
-            <td style="text-align:right">${formatNum(it.bookmarks)}</td>
-            <td>${tagsHtml}</td>
-        </tr>`;
-        })
-        .join("");
-    container.innerHTML = `<table>
-        <thead><tr>
-            <th>${t("th_pid")}</th><th>${t("th_title")}</th>
-            <th>${t("th_pages")}</th><th>${t("th_author")}</th>
-            <th style="text-align:right">${t("th_bookmarks")}</th>
-            <th>${t("th_tags")}</th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-    </table>`;
+    renderTable("account-bookmarks", items, { selectable: false });
 }
 
 function loadFollowing() {
@@ -2500,13 +2936,15 @@ function saveUiState() {
         },
         search: {
             mode: document.getElementById("search-mode")?.value,
-            tag: document.getElementById("search-tag")?.value,
+            tag: searchCurrentTag,
             sort: document.getElementById("search-sort")?.value,
             page: document.getElementById("search-page")?.value,
             pages: document.getElementById("search-pages")?.value,
             target: document.getElementById("search-target")?.value,
             duration: document.getElementById("search-duration")?.value,
-            items: searchItemsRaw.slice(0, 500),
+            pane: searchActivePane,
+            illust_items: searchIllustItemsRaw.slice(0, 500),
+            novel_items: searchNovelItemsRaw.slice(0, 500),
         },
         recommend: { items: recommendItems.slice(0, 500) },
         follow: {
@@ -2539,10 +2977,20 @@ function restoreUiState(state) {
 
     if (state.search?.tag)
         setEl("search-tag", (el) => (el.value = state.search.tag));
-    if (state.search?.items?.length) {
-        searchItemsRaw = state.search.items;
-        searchItems = searchItemsRaw.slice();
-        renderTable("search-list", searchItems);
+
+    if (
+        state.search?.illust_items?.length ||
+        state.search?.novel_items?.length
+    ) {
+        searchIllustItemsRaw = state.search.illust_items || [];
+        searchNovelItemsRaw = state.search.novel_items || [];
+        searchCurrentTag = state.search.tag || "";
+        searchIllustItems = searchIllustItemsRaw.slice();
+        searchNovelItems = searchNovelItemsRaw.slice();
+        renderTable("search-list-illust", searchIllustItems);
+        renderTable("search-list-novel", searchNovelItems);
+        setEl("search-pane-tabs", (el) => (el.style.display = ""));
+        switchSearchPane(state.search.pane || "illust");
     }
 
     if (state.recommend?.items?.length) {
@@ -2586,10 +3034,13 @@ function restoreUiState(state) {
     }
 
     if (state.active_tab) {
-        const btn = document.querySelector(
-            `nav button[data-tab="${state.active_tab}"]`,
-        );
-        if (btn) btn.click();
+        if (state.active_tab === "search") switchTab("search");
+        else {
+            const btn = document.querySelector(
+                `nav button[data-tab="${state.active_tab}"]`,
+            );
+            if (btn) btn.click();
+        }
     }
 }
 

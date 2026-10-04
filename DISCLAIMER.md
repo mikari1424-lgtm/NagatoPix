@@ -13,6 +13,7 @@ GPL License 3.0 - General Public License 3.0
 ## 美术资源许可
 
 - Logo和APP图标: 已取得授权自[罗晨晔Channel](https://space.bilibili.com/6699653), 使用GIMP + XnView MP进行了修改和后期处理。
+- SVG图标: [Lucide](https://lucide.dev/icons/)
 
 ## 免责声明
 
