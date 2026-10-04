@@ -555,10 +555,8 @@ function setEl(id, fn) {
 
 // ============ Selection / 选择 ============
 function getActiveTab() {
-    const active = document.querySelector("nav button.active");
-    if (active) return active.dataset.tab;
-    const searchTab = document.getElementById("tab-search");
-    if (searchTab && searchTab.classList.contains("active")) return "search";
+    const activeTabEl = document.querySelector(".tab.active");
+    if (activeTabEl) return activeTabEl.id.replace(/^tab-/, "");
     return null;
 }
 
@@ -566,17 +564,14 @@ function getSelectionInfo() {
     const tab = getActiveTab();
     if (tab === "ranking")
         return { containerId: "ranking-list", items: rankingItems };
-        if (tab === "search") {
-            if (searchActivePane === "novel")
-                return {
-                    containerId: "search-list-novel",
-                    items: searchNovelItems,
-                };
+    if (tab === "search") {
+        if (searchActivePane === "novel")
             return {
-                containerId: "search-list-illust",
-                items: searchIllustItems,
+                containerId: "search-list-novel",
+                items: searchNovelItems,
             };
-        }
+        return { containerId: "search-list-illust", items: searchIllustItems };
+    }
     if (tab === "recommend")
         return { containerId: "recommend-list", items: recommendItems };
     if (tab === "follow")

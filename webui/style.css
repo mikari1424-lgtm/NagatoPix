@@ -1008,7 +1008,16 @@ tr.selected .row-checkbox {
     transform: scale(1.08);
     box-shadow: 0 10px 28px rgba(59, 130, 246, 0.6);
 }
-.float-ball .ball-icon { font-size: 18px; line-height: 1; }
+.float-ball .ball-icon {
+    width: 20px;
+    height: 20px;
+    object-fit: contain;
+    display: block;
+    filter: brightness(0) invert(1);   /* SVG 描边转白，与渐变背景对比 */
+    pointer-events: none;              /* 点击穿透到父 div */
+    user-select: none;
+    -webkit-user-drag: none;
+}
 .float-ball .ball-count { font-size: 13px; font-weight: 700; line-height: 1.1; }
 
 /* ============ Modal ============ */
