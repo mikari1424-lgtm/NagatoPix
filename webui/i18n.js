@@ -388,6 +388,9 @@ const I18N = {
         share_detail_date: "发布时间",
         share_detail_url: "作品链接",
         toast_share_copied: "已复制到剪贴板",
+        novel_restricted: "由于作品浏览限制设置无法查看",
+        iv_caption: "作品说明",
+        iv_no_caption: "（无作品说明）",
     },
     en: {
         connecting: "Connecting...",
@@ -777,6 +780,9 @@ const I18N = {
         share_detail_date: "Date",
         share_detail_url: "URL",
         toast_share_copied: "Copied to clipboard",
+        novel_restricted: "Restricted by browsing settings",
+        iv_caption: "Caption",
+        iv_no_caption: "(No caption)",
     },
 };
 

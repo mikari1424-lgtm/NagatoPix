@@ -1262,11 +1262,16 @@ class PixivAPI:
                 'large_image_url': regular_url,
             }
 
+        caption_html = (body.get('illustComment')
+                        or body.get('description') or '')
+        caption_plain = self._html_to_text(caption_html)
+        caption_parts = self._html_to_parts(caption_html)
+
         return {
             'id': int(iid),
             'title': body.get('illustTitle') or body.get('title', ''),
-            'caption': self._html_to_text(
-                body.get('illustComment') or body.get('description') or ''),
+            'caption': caption_plain,
+            'caption_parts': caption_parts,
             'create_date': body.get('createDate', '') or '',
             'user': user,
             'tags': tags_out,
@@ -2119,7 +2124,9 @@ class DownloadWorker:
         if fmt not in ('gif', 'apng', 'webp'):
             fmt = 'gif'
         ext_map = {'gif': '.gif', 'apng': '.apng', 'webp': '.webp'}
-        out_path = self.download_dir / f"{iid}_ugoira{ext_map[fmt]}"
+        ugoira_dir = self.download_dir / "ugoira"
+        ugoira_dir.mkdir(parents=True, exist_ok=True)
+        out_path = ugoira_dir / f"{iid}_ugoira{ext_map[fmt]}"
 
         if out_path.exists():
             write_log(t('file_exists', path=str(out_path)), 'info')
@@ -2231,17 +2238,47 @@ class DownloadWorker:
             return False, nid, None, None
 
         title = info.get('title', '')
-        author = info.get('user', {}).get('name', '')
-        author_id = info.get('user', {}).get('id')
+        user = info.get('user', {}) or {}
+        author = user.get('name', '')
+        author_id = user.get('id')
+        author_account = user.get('account', '')
         create_date = info.get('create_date', '')
         caption = info.get('caption', '')
-        tags = info.get('tags', [])
-        tag_names = [t.get('name', '') for t in tags]
+        tags = info.get('tags', []) or []
+        x_restrict = info.get('x_restrict', 0) or 0
+        ai_type = info.get('novel_ai_type', 0) or 0
+        total_view = info.get('total_view', 0) or 0
+        total_bookmarks = info.get('total_bookmarks', 0) or 0
+        text_length = info.get('text_length', 0) or 0
+        series = info.get('series') or {}
+
+        # Tag 构建（与 _process_illust 同一套）
+        tag_names = []
+        trans_names = []
+        for x in tags:
+            if isinstance(x, dict):
+                tag_names.append(x.get('name', '') or '')
+                trans_names.append(x.get('translated_name', '') or '')
+            elif isinstance(x, str):
+                tag_names.append(x)
+                trans_names.append('')
+        tag_strs = []
+        for i, n in enumerate(tag_names):
+            tr = trans_names[i] if i < len(trans_names) else ''
+            tag_strs.append(f"{n}({tr})" if tr else n)
+
+        pri = []
+        if ai_type == 2:
+            pri.append(meta('ai_generated'))
+        if x_restrict == 1:
+            pri.append("R-18")
+        elif x_restrict == 2:
+            pri.append("R-18G")
+        final_tags = pri + tag_strs
 
         self._update_item_status(nid, title=title,
                                  stage='fetching_text', progress=15)
 
-        # Full text / 正文
         text_resp = self.api.get_novel_text(nid)
         novel_text = ''
         if text_resp:
@@ -2255,26 +2292,51 @@ class DownloadWorker:
 
         self._update_item_status(nid, stage='writing', progress=60)
 
-        # Markdown + YAML frontmatter
         safe_title = re.sub(r'[\\/:*?"<>|]', '_', title)[:80]
         work_dir = self.download_dir / "novels"
         work_dir.mkdir(exist_ok=True)
         md_path = work_dir / f"{nid}_{safe_title}.md"
 
+        source_url = f"https://www.pixiv.net/novel/show.php?id={nid}"
+        clean_cap = self._clean_caption(caption)
+
+        # YAML frontmatter
         frontmatter = {
-            'id': nid, 'title': title, 'author': author,
-            'author_id': author_id, 'create_date': create_date,
-            'tags': tag_names,
-            'source': f"https://www.pixiv.net/novel/show.php?id={nid}",
+            'id': nid,
+            'title': title,
+            'author': author,
+            'author_id': author_id,
+            'author_account': author_account,
+            'create_date': create_date,
+            'tags': final_tags,
+            'x_restrict': x_restrict,
+            'ai_generated': ai_type == 2,
+            'total_view': total_view,
+            'total_bookmarks': total_bookmarks,
+            'text_length': text_length,
+            'series_id': series.get('id'),
+            'series_title': series.get('title') or '',
+            'source': source_url,
         }
+        if clean_cap:
+            frontmatter['caption'] = clean_cap
 
         yaml_lines = ['---']
         for k, v in frontmatter.items():
+            if v is None:
+                continue
             if isinstance(v, list):
+                if not v:
+                    yaml_lines.append(f"{k}: []")
+                    continue
                 yaml_lines.append(f"{k}:")
                 for item in v:
                     yaml_lines.append(
                         f"  - {json.dumps(item, ensure_ascii=False)}")
+            elif isinstance(v, bool):
+                yaml_lines.append(f"{k}: {'true' if v else 'false'}")
+            elif isinstance(v, (int, float)):
+                yaml_lines.append(f"{k}: {v}")
             else:
                 yaml_lines.append(
                     f"{k}: {json.dumps(v, ensure_ascii=False)}")
@@ -2282,7 +2344,6 @@ class DownloadWorker:
         yaml_lines.append('')
         yaml_lines.append(f"# {title}")
         yaml_lines.append('')
-        clean_cap = self._clean_caption(caption)
         if clean_cap:
             yaml_lines.append(clean_cap)
             yaml_lines.append('')
@@ -2298,20 +2359,27 @@ class DownloadWorker:
 
         self._update_item_status(nid, stage='writing_meta', progress=85)
 
-        metadata = {
-            "XMP-dc:title": title,
-            "XMP-dc:creator": author,
-            "XMP-dc:subject": tag_names,
-            "XMP-dc:description": clean_cap
-                or f"Source: https://www.pixiv.net/novel/show.php?id={nid}",
-            "XMP-dc:type": "novel",
-            "XMP:CreateDate": create_date,
-            "XMP:MetadataDate": create_date,
-        }
-        self.exiftool.write_metadata(md_path, metadata, export_json=False)
+        restr_str = ""
+        if x_restrict == 1:
+            restr_str = "R-18"
+        elif x_restrict == 2:
+            restr_str = "R-18G"
+
         self._update_item_status(nid, status='success',
                                  stage='done', progress=100)
-        return True, nid, md_path, metadata
+
+        append_history({
+            'id': nid, 'title': title, 'page_count': 1,
+            'author': author, 'author_id': author_id,
+            'tags': final_tags,
+            'ai_generated': ai_type == 2,
+            'sensitive': x_restrict > 0,
+            'restriction': restr_str,
+            'publish_time': format_date(create_date),
+            'downloaded_at': int(time.time()),
+            'type': 'novel',
+        })
+        return True, nid, md_path, None
 
     # ---------- Caption cleanup ----------
     def _clean_caption(self, caption):

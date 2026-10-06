@@ -2259,11 +2259,12 @@ function renderIllustViewer() {
     }
     setEl("iv-badges", (el) => (el.innerHTML = badges));
 
-    setEl("iv-views", (el) => (el.textContent = formatNum(it.views)));
-    setEl("iv-bookmarks", (el) => (el.textContent = formatNum(it.bookmarks)));
-    setEl("iv-likes", (el) => (el.textContent = formatNum(it.likes)));
-    setEl("iv-pages", (el) => (el.textContent = it.page_count || 1));
-    setEl("iv-date", (el) => (el.textContent = it.date || "—"));
+    const metaParts = [];
+    if (it.date) metaParts.push(escapeHtml(it.date));
+    metaParts.push(`${t("th_views")} ${formatNum(it.views)}`);
+    metaParts.push(`${t("th_bookmarks")} ${formatNum(it.bookmarks)}`);
+    metaParts.push(`${t("th_pages")} ${it.page_count || 1}`);
+    setEl("iv-meta", (el) => (el.textContent = metaParts.join(" · ")));
 
     const tagsHtml = (it.tags || [])
         .map(
@@ -2274,6 +2275,20 @@ function renderIllustViewer() {
         )
         .join("");
     setEl("iv-tags", (el) => (el.innerHTML = tagsHtml));
+
+    const captionParts = slim.caption_parts;
+    const caption = slim.caption || "";
+    setEl("iv-caption-text", (el) => {
+        if (Array.isArray(captionParts) && captionParts.length) {
+            el.innerHTML = renderCommentParts(captionParts);
+        } else if (caption) {
+            el.innerHTML = escapeHtml(caption).replace(/\n/g, "<br>");
+        } else {
+            el.innerHTML = `<span class="empty-hint">${t("iv_no_caption")}</span>`;
+        }
+    });
+    setEl("iv-caption-wrap", (el) => (el.style.display = "none"));
+    setEl("iv-caption-btn", (el) => el.classList.remove("expanded"));
 
     renderIvUser(user, it);
     renderIvActions(it);
@@ -2409,7 +2424,19 @@ function renderNovelSeries(items) {
     }
     container.innerHTML = nsState.items
         .map((it, idx) => {
-            const isCurrent = it.id === nsState.currentId;
+            const isCurrent = it && it.id === nsState.currentId;
+            const hasData =
+                it && it.id && (it.title || it.date || it.text_length);
+            if (!hasData) {
+                return `<div class="novel-series-item empty">
+                    <div class="novel-series-order">${idx + 1}</div>
+                    <div class="novel-series-info">
+                        <div class="novel-series-name restricted">
+                            ${t("novel_restricted")}
+                        </div>
+                    </div>
+                </div>`;
+            }
             return `<div class="novel-series-item ${isCurrent ? "current" : ""}"
                     onclick="onSeriesItemClick(${idx})">
                 <div class="novel-series-order">${idx + 1}</div>
@@ -2426,7 +2453,7 @@ function renderNovelSeries(items) {
 
 function onSeriesItemClick(idx) {
     const it = nsState.items[idx];
-    if (!it || it.id === nsState.currentId) return;
+    if (!it || !it.id || it.id === nsState.currentId) return;
     closeNovelSeries();
     openNovelViewer(it.id);
 }
@@ -2498,6 +2525,20 @@ function downloadCurrentIllust() {
     const entry = { url };
     if (it._slim_illust) entry.metadata = { illust: it._slim_illust };
     send({ cmd: "add_items", items: [entry] });
+    toast(t("toast_download_added"), "success");
+}
+
+function downloadCurrentNovel() {
+    const novel = nvState.novel;
+    if (!novel || !novel.id) return;
+    send({
+        cmd: "add_items",
+        items: [
+            {
+                url: `https://www.pixiv.net/novel/show.php?id=${novel.id}`,
+            },
+        ],
+    });
     toast(t("toast_download_added"), "success");
 }
 

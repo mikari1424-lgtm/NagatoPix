@@ -486,34 +486,39 @@
                         <div class="iv-badges" id="iv-badges"></div>
                     </div>
 
-                    <div class="iv-stats">
-                        <div><span data-i18n="th_views"></span>: <b id="iv-views">-</b></div>
-                        <div><span data-i18n="th_bookmarks"></span>: <b id="iv-bookmarks">-</b></div>
-                        <div><span data-i18n="th_pages"></span>: <b id="iv-pages">-</b></div>
-                        <div><span data-i18n="th_date"></span>: <b id="iv-date">-</b></div>
-                    </div>
+                    <div class="iv-meta" id="iv-meta"></div>
 
                     <div class="iv-tags" id="iv-tags"></div>
-
+                    <div class="iv-tags" id="iv-tags"></div>
+                    <div class="iv-caption-section">
+                        <button class="cloud-toggle-btn" type="button" id="iv-caption-btn"
+                            onclick="toggleTagCloud('iv-caption', this)">
+                            <img class="expand-arrow" src="/ui_icons/expand.svg" alt="">
+                            <span data-i18n="iv_caption"></span>
+                        </button>
+                        <div class="tag-cloud-wrap" id="iv-caption-wrap" style="display:none">
+                            <div class="iv-caption-text" id="iv-caption-text"></div>
+                        </div>
+                    </div>
                     <div class="iv-user-card" id="iv-user-card"></div>
-                                        <div class="iv-actions">
-                                            <button class="iv-action-btn" id="iv-bookmark-btn" onclick="toggleIllustBookmark()">
-                                                <img class="btn-icon" src="/ui_icons/bookmark_pixiv.svg" alt="">
-                                                <span id="iv-bookmark-label" data-i18n="btn_pixiv_bookmark"></span>
-                                            </button>
-                                            <button class="iv-action-btn" id="iv-share-btn" onclick="toggleShareMenu(event)">
-                                                <span data-i18n="btn_share"></span>
-                                            </button>
-                                            <button class="iv-action-btn" onclick="downloadCurrentIllust()">
-                                                <img class="btn-icon" src="/ui_icons/download.svg" alt="">
-                                                <span data-i18n="btn_download"></span>
-                                            </button>
-                                            <div class="share-menu" id="share-menu" style="display:none">
-                                                <button type="button" onclick="copyIllustId()" data-i18n="share_copy_id"></button>
-                                                <button type="button" onclick="copyIllustUrl()" data-i18n="share_copy_url"></button>
-                                                <button type="button" onclick="copyIllustDetail()" data-i18n="share_copy_detail"></button>
-                                            </div>
-                                        </div>
+                    <div class="iv-actions">
+                        <button class="iv-action-btn" id="iv-bookmark-btn" onclick="toggleIllustBookmark()">
+                            <img class="btn-icon" src="/ui_icons/bookmark_pixiv.svg" alt="">
+                            <span id="iv-bookmark-label" data-i18n="btn_pixiv_bookmark"></span>
+                        </button>
+                        <button class="iv-action-btn" id="iv-share-btn" onclick="toggleShareMenu(event)">
+                            <span data-i18n="btn_share"></span>
+                        </button>
+                        <button class="iv-action-btn" onclick="downloadCurrentIllust()">
+                            <img class="btn-icon" src="/ui_icons/download.svg" alt="">
+                            <span data-i18n="btn_download"></span>
+                        </button>
+                        <div class="share-menu" id="share-menu" style="display:none">
+                            <button type="button" onclick="copyIllustId()" data-i18n="share_copy_id"></button>
+                            <button type="button" onclick="copyIllustUrl()" data-i18n="share_copy_url"></button>
+                            <button type="button" onclick="copyIllustDetail()" data-i18n="share_copy_detail"></button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -645,12 +650,15 @@
                 <div class="novel-series" id="nv-series"></div>
                 <div class="iv-tags" id="nv-tags"></div>
             </div>
-            <div class="novel-viewer-nav">
-                <button class="secondary" id="nv-prev" onclick="novelViewerPrev()" data-i18n="novel_prev"></button>
-                <button class="secondary" id="nv-series-btn" onclick="openNovelSeries()"
-                    data-i18n="novel_series"></button>
-                <button class="secondary" id="nv-next" onclick="novelViewerNext()" data-i18n="novel_next"></button>
-            </div>
+                    <div class="novel-viewer-nav">
+                        <button class="secondary" id="nv-prev" onclick="novelViewerPrev()" data-i18n="novel_prev"></button>
+                        <button class="secondary" id="nv-series-btn" onclick="openNovelSeries()" data-i18n="novel_series"></button>
+                        <button class="secondary" id="nv-next" onclick="novelViewerNext()" data-i18n="novel_next"></button>
+                        <button class="iv-action-btn" id="nv-download" onclick="downloadCurrentNovel()">
+                            <img class="btn-icon" src="/ui_icons/download.svg" alt="">
+                            <span data-i18n="btn_download"></span>
+                        </button>
+                    </div>
             <div class="novel-text" id="nv-text"></div>
         </div>
     </div>
