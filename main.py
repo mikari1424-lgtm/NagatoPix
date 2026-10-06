@@ -42,7 +42,7 @@ import tomllib
 from i18n import t, meta, set_language
 
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 
 
 # ============================================================
