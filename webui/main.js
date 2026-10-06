@@ -405,6 +405,7 @@ function switchLanguage(lang) {
     applyI18n();
     send({ cmd: "set_language", lang });
     renderTokenHelp();
+    renderSearchExtMenu();
 }
 
 function applyTheme(theme) {
@@ -419,6 +420,82 @@ function toggleTheme() {
     const next = cur === "dark" ? "light" : "dark";
     applyTheme(next);
     send({ cmd: "set_theme", theme: next });
+}
+
+const EXT_SEARCH_ENGINES = [
+    {
+        key: "moewiki",
+        icon: "/ext_search_icons/moewiki.png",
+        labelKey: "ext_search_moewiki",
+        url: "https://zh.moegirl.org.cn/index.php?fulltext=1&search={keyword}",
+    },
+    {
+        key: "wikipedia_zh",
+        icon: "/ext_search_icons/wikipedia.png",
+        labelKey: "ext_search_wikipedia_zh",
+        url: "https://zh.wikipedia.org/w/index.php?title=Special:Search&fulltext=1&search={keyword}",
+    },
+    {
+        key: "wikipedia_en",
+        icon: "/ext_search_icons/wikipedia.png",
+        labelKey: "ext_search_wikipedia_en",
+        url: "https://en.wikipedia.org/w/index.php?title=Special:Search&fulltext=1&search={keyword}",
+    },
+    {
+        key: "baidu",
+        icon: "/ext_search_icons/baidu.png",
+        labelKey: "ext_search_baidu",
+        url: "https://baike.baidu.com/search?enc=utf8&word={keyword}",
+    },
+    {
+        key: "bing",
+        icon: "/ext_search_icons/Bing.png",
+        labelKey: "ext_search_bing",
+        url: "https://www.bing.com/search?q={keyword}",
+    },
+    {
+        key: "google",
+        icon: "/ext_search_icons/Google.png",
+        labelKey: "ext_search_google",
+        url: "https://www.google.com/search?q={keyword}",
+    },
+];
+
+function renderSearchExtMenu() {
+    const menu = document.getElementById("ext-search-menu");
+    if (!menu) return;
+    menu.innerHTML = EXT_SEARCH_ENGINES.map(
+        (e) => `<button type="button" onclick="searchExternal('${e.key}')">
+            <img src="${e.icon}" alt="">
+            <span data-i18n="${e.labelKey}">${t(e.labelKey)}</span>
+        </button>`,
+    ).join("");
+}
+
+function toggleSearchExtMenu(ev) {
+    if (ev) ev.stopPropagation();
+    const menu = document.getElementById("ext-search-menu");
+    if (!menu) return;
+    const isOpen = menu.style.display !== "none" && menu.style.display !== "";
+    menu.style.display = isOpen ? "none" : "";
+}
+
+function closeSearchExtMenu() {
+    const menu = document.getElementById("ext-search-menu");
+    if (menu) menu.style.display = "none";
+}
+
+function searchExternal(engineKey) {
+    const engine = EXT_SEARCH_ENGINES.find((e) => e.key === engineKey);
+    if (!engine) return;
+    const tag = (document.getElementById("search-tag")?.value || "").trim();
+    if (!tag) {
+        closeSearchExtMenu();
+        return toast(t("toast_need_tag_for_encyclopedia"), "error");
+    }
+    const url = engine.url.replace("{keyword}", encodeURIComponent(tag));
+    window.open(url, "_blank", "noopener");
+    closeSearchExtMenu();
 }
 
 function renderTokenHelp() {
@@ -2071,14 +2148,32 @@ function toggleShareMenu(ev) {
 }
 
 document.addEventListener("click", (e) => {
-    const menu = document.getElementById("share-menu");
-    if (!menu) return;
-    if (menu.style.display === "none" || !menu.style.display) return;
+    const shareMenu = document.getElementById("share-menu");
     if (
-        !e.target.closest("#share-menu") &&
-        !e.target.closest("#iv-share-btn")
+        shareMenu &&
+        shareMenu.style.display !== "none" &&
+        shareMenu.style.display !== ""
     ) {
-        menu.style.display = "none";
+        if (
+            !e.target.closest("#share-menu") &&
+            !e.target.closest("#iv-share-btn")
+        ) {
+            shareMenu.style.display = "none";
+        }
+    }
+
+    const extMenu = document.getElementById("ext-search-menu");
+    if (
+        extMenu &&
+        extMenu.style.display !== "none" &&
+        extMenu.style.display !== ""
+    ) {
+        if (
+            !e.target.closest("#ext-search-menu") &&
+            !e.target.closest("#search-ext-btn")
+        ) {
+            extMenu.style.display = "none";
+        }
     }
 });
 
@@ -2608,13 +2703,6 @@ document.addEventListener("click", (e) => {
     }
 });
 
-// ============ Encyclopedia search ============
-function searchEncyclopedia() {
-    const tag = document.getElementById("search-tag")?.value.trim();
-    if (!tag) return toast(t("toast_need_tag_for_encyclopedia"), "error");
-    const url = `https://zh.moegirl.org.cn/index.php?fulltext=1&search=%22${encodeURIComponent(tag)}%22&title=Special%3A%E6%90%9C%E7%B4%A2`;
-    window.open(url, "_blank", "noopener");
-}
 
 // ============ Queue / download tab ============
 function toggleDownloadItems() {
@@ -3326,4 +3414,5 @@ applyTheme(localStorage.getItem("nagato_theme") || "dark");
 applyI18n();
 renderTokenHelp();
 connect();
+renderSearchExtMenu();
 bindConfigAutoSave();

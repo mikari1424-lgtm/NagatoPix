@@ -191,13 +191,16 @@
 
         <section class="tab sticky-results" id="tab-search">
             <div class="panel search-header-card" id="search-header-card" style="display:none">
-                <h2 class="search-header-title">
-                    <span id="search-header-title-text"></span>
-                    <button class="search-header-wiki btn-with-icon" type="button" onclick="searchEncyclopedia()"
-                        data-i18n-title="btn_search_encyclopedia">
-                        <img class="btn-icon" src="/ui_icons/search_ext.svg" alt="">
-                    </button>
-                </h2>
+                                <h2 class="search-header-title">
+                                    <span id="search-header-title-text"></span>
+                                    <div class="search-ext-wrap">
+                                        <button class="search-header-wiki" type="button" id="search-ext-btn" onclick="toggleSearchExtMenu(event)"
+                                            data-i18n-title="btn_search_encyclopedia">
+                                            <img class="btn-icon" src="/ui_icons/search_ext.svg" alt="">
+                                        </button>
+                                        <div class="ext-search-menu" id="ext-search-menu" style="display:none"></div>
+                                    </div>
+                                </h2>
                 <div class="search-header-total" id="search-header-total"></div>
                 <div class="search-header-actions">
                     <button class="search-tag-toggle" type="button" onclick="toggleSearchTagCloud('hot', this)">

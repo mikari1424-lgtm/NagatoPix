@@ -192,6 +192,53 @@ body {
     filter: brightness(0) invert(0.6);
 }
 
+.search-ext-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+}
+
+.ext-search-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 4px 16px var(--shadow);
+    display: flex;
+    flex-direction: column;
+    min-width: 200px;
+    padding: 4px;
+    z-index: 20;
+}
+.ext-search-menu button {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    padding: 8px 10px;
+    text-align: left;
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: inherit;
+    white-space: nowrap;
+}
+.ext-search-menu button:hover {
+    background: var(--bg-hover);
+    color: var(--accent);
+}
+.ext-search-menu img {
+    width: 16px;
+    height: 16px;
+    object-fit: contain;
+    flex-shrink: 0;
+    display: block;
+}
+
 .sidebar {
     grid-area: sidebar;
     background: var(--bg-secondary);

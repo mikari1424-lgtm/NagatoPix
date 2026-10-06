@@ -2123,7 +2123,7 @@ class DownloadWorker:
         fmt = str(self.config.get('ugoira_format', 'gif')).lower()
         if fmt not in ('gif', 'apng', 'webp'):
             fmt = 'gif'
-        ext_map = {'gif': '.gif', 'apng': '.apng', 'webp': '.webp'}
+        ext_map = {'gif': '.gif', 'apng': '.png', 'webp': '.webp'}
         ugoira_dir = self.download_dir / "ugoira"
         ugoira_dir.mkdir(parents=True, exist_ok=True)
         out_path = ugoira_dir / f"{iid}_ugoira{ext_map[fmt]}"
@@ -3802,6 +3802,9 @@ async def main_async(port, config, accounts, session):
         ui_icons = web_dir / "ui_icons"
         if ui_icons.exists():
             app.router.add_static('/ui_icons/', ui_icons)
+        ext_icons = web_dir / "ext_search_icons"
+        if ext_icons.exists():
+            app.router.add_static('/ext_search_icons/', ext_icons)
 
     async def on_shutdown(app):
         try:
