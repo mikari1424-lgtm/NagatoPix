@@ -53,8 +53,6 @@ def auth(username=None, password=None, refresh_token=None, headers=None)
 - 返回值为 token 响应（`response.access_token`、`response.refresh_token`、`response.user.id` 等）。
 - 也支持 `auth(username=..., password=...)`；refresh_token 方式更适合脚本。
 
-> **安全提示**：`demo.py` 第 7 行把 refresh_token 硬编码在源码里。refresh_token 等同于账号凭据，建议改用环境变量或本地配置文件，并避免提交到仓库。本文不重复该 token 的值。
-
 ### 2.3 demo.py 的组织方式
 
 `demo.py` 的结构很直接：
