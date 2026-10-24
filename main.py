@@ -42,7 +42,7 @@ import tomllib
 from i18n import t, meta, set_language
 
 
-VERSION = "1.3.1"
+VERSION = "1.3.2"
 
 
 # ============================================================
@@ -623,6 +623,21 @@ class SessionManager:
     def set_ui_state(self, state: dict):
         self.data['ui_state'] = state
         self.save()
+
+    def update_ui_state(self, patch: dict):
+        """Merge patch into ui_state and persist. Caller does NOT hold lock."""
+        with self._lock:
+            current = self.data.setdefault('ui_state', {})
+            for k, v in patch.items():
+                if v is None:
+                    current.pop(k, None)
+                else:
+                    current[k] = v
+            try:
+                with open(SESSION_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(self.data, f, indent=2, ensure_ascii=False)
+            except Exception as e:
+                write_log(f"session.json save failed: {e}", 'error')
 
 
 # ============================================================
@@ -1228,6 +1243,7 @@ class PixivAPI:
                 'translated_name':
                     self._extract_translation(t.get('translation') or {}),
             })
+        
 
         # User
         user_id = body.get('userId')
@@ -1247,7 +1263,9 @@ class PixivAPI:
         type_str = type_map.get(body.get('illustType', 0), 'illust')
 
         # AI
-        ai_type = 2 if body.get('aiType', 0) == 2 else 0
+        ai_type = body.get('aiType', 0)
+        if not isinstance(ai_type, int):
+            ai_type = 0
 
         # Page count
         page_count = body.get('pageCount', 1) or 1
@@ -2472,6 +2490,8 @@ def format_item(it):
     avatar = (user.get('profile_image_urls', {}) or {}).get('medium', '')
 
     ai_type = it.get('illust_ai_type', 0)
+    if not isinstance(ai_type, int):
+        ai_type = 0
     x_restrict = it.get('x_restrict', 0)
     restr_attrs = it.get('restriction_attributes', [])
     if x_restrict == 1:
@@ -2554,6 +2574,9 @@ def format_novel(it):
     user = it.get('user', {}) or {}
     avatar = (user.get('profile_image_urls', {}) or {}).get('medium', '')
     tags_out = []
+    ai_type = it.get('novel_ai_type', 0)
+    if not isinstance(ai_type, int):
+        ai_type = 0
     for x in it.get('tags', []) or []:
         if isinstance(x, dict):
             name = x.get('name', '') or ''
@@ -2574,6 +2597,8 @@ def format_novel(it):
         'tags': tags_out,
         'date': format_date(it.get('create_date', '') or ''),
         'type': 'novel',
+        'ai_generated': ai_type == 2,
+        'is_original': bool(it.get('is_original')) and ai_type != 2,
         'text_length': it.get('text_length', 0) or 0,
         'x_restrict': it.get('x_restrict', 0) or 0,
         'ai_type': it.get('novel_ai_type', 0) or 0,
@@ -2602,8 +2627,7 @@ def parse_bookmark_html(html):
 # Factory / 工厂
 # ============================================================
 def make_api(bridge) -> PixivAPI:
-    return PixivAPI(bridge.config, bridge.worker.rate_limiter,
-                    accounts=bridge.accounts)
+    return bridge.worker.api
 
 
 # ============================================================
@@ -2653,7 +2677,12 @@ async def handle_command(bridge, cmd, ws):
     elif c == 'save_ui_state':
         bridge.session.set_ui_state(cmd.get('state', {}))
         await ws.send_str(json.dumps({'type': 'ui_state_saved'}))
-
+    
+    elif c == 'get_ui_state':
+        await ws.send_str(json.dumps({
+            'type': 'ui_state',
+            'state': bridge.session.get_ui_state()}, ensure_ascii=False))
+    
     # ---------- Queue ----------
     elif c == 'add_items':
         n = bridge.worker.add_items(cmd.get('items', []))
@@ -2880,10 +2909,31 @@ async def handle_command(bridge, cmd, ws):
             'tag': tag, 'total': total,
             'related_tags': related_tags},
             ensure_ascii=False))
+        bridge.session.update_ui_state({
+            'active_tab': 'search',
+            'search': {
+                'tag': tag, 'mode': 'illust', 'sort': sort, 'target': target,
+                'page': start_page, 'pages': pages,
+                'duration': duration or '',
+                'start_date': start_date or '',
+                'end_date': end_date or '',
+                'filters': filters,
+                'pane': 'illust',
+                'illust_items': illust_items[:500],
+                'novel_items': novel_items[:500],
+                'header': {
+                    'tag': tag,
+                    'total': total,
+                    'related_tags': related_tags,
+                },
+                'fetched_at': int(time.time() * 1000),
+            },
+        })
 
     # ---------- Ranking ----------
     elif c == 'ranking':
         mode = cmd.get('mode', 'day')
+        date = cmd.get('date', '') or None
         limit = 480
         loop = asyncio.get_event_loop()
 
@@ -2900,7 +2950,7 @@ async def handle_command(bridge, cmd, ws):
                 bridge.broadcast({'type': 'ranking_progress',
                                   'phase': 'today', 'count': len(today)})
                 try:
-                    resp = api.get_ranking(mode, offset=offset)
+                    resp = api.get_ranking(mode, date=date, offset=offset)
                 except Exception as e:
                     write_log(t('ranking_failed', error=str(e)), 'error')
                     break
@@ -2931,14 +2981,19 @@ async def handle_command(bridge, cmd, ws):
             today = today[:limit]
 
             # yesterday
-            if today_date:
+            if date:
+                try:
+                    base_dt = datetime.strptime(date, '%Y-%m-%d')
+                except ValueError:
+                    base_dt = datetime.now()
+            elif today_date:
                 try:
                     base_dt = datetime.strptime(today_date, '%Y-%m-%d')
                 except ValueError:
                     base_dt = datetime.now()
             else:
                 base_dt = datetime.now()
-            yesterday_date = (base_dt - timedelta(days=1)).strftime('%Y-%m-%d')
+            prev_date = (base_dt - timedelta(days=1)).strftime('%Y-%m-%d')
 
             yesterday_ids = set()
             offset = 0
@@ -2949,7 +3004,7 @@ async def handle_command(bridge, cmd, ws):
                                   'phase': 'yesterday',
                                   'count': len(yesterday_ids)})
                 try:
-                    resp = api.get_ranking(mode, date=yesterday_date,
+                    resp = api.get_ranking(mode, date=prev_date,
                                            offset=offset)
                 except Exception as e:
                     write_log(t('ranking_failed', error=str(e)), 'error')
@@ -2983,6 +3038,15 @@ async def handle_command(bridge, cmd, ws):
             write_log(f"ranking executor failed: {e}", 'error')
             await ws.send_str(json.dumps(
                 {'type': 'error', 'msg': f'Ranking failed: {e}'}))
+            bridge.session.update_ui_state({
+            'active_tab': 'ranking',
+            'ranking': {
+                'mode': mode,
+                'date': date or '',
+                'items': formatted[:500],
+                'fetched_at': int(time.time() * 1000),
+            },
+        })
             return
 
         formatted = []
@@ -3036,17 +3100,22 @@ async def handle_command(bridge, cmd, ws):
             api.ensure_login()
             detail = api.get_user_detail(uid)
             if not detail:
-                return None, [], None
+                return None, [], [], None
             bridge.broadcast({'type': 'user_detail_phase',
                               'phase': 'detail',
                               'user': format_user_detail(detail)})
+
+            delay = float(bridge.config.get('api.request_delay', 0.3))
+
+            # Illusts
             all_illusts = []
             offset = 0
             page = 1
-            delay = float(bridge.config.get('api.request_delay', 0.3))
             while True:
-                bridge.broadcast({'type': 'user_detail_phase', 'phase': 'illusts',
-                                  'page': page, 'count': len(all_illusts)})
+                bridge.broadcast({'type': 'user_detail_phase',
+                                  'phase': 'illusts',
+                                  'page': page,
+                                  'count': len(all_illusts)})
                 try:
                     resp = api.get_user_illusts(uid, offset=offset)
                 except Exception as e:
@@ -3056,21 +3125,41 @@ async def handle_command(bridge, cmd, ws):
                 if not items:
                     break
                 all_illusts.extend(items)
-                if len(items) < 30:
-                    break
-                if not resp.get('next_url'):
-                    break
                 offset += 30
                 page += 1
                 time.sleep(delay)
+
+            # Novels
+            all_novels = []
+            offset = 0
+            page = 1
+            while True:
+                bridge.broadcast({'type': 'user_detail_phase',
+                                  'phase': 'novels',
+                                  'page': page,
+                                  'count': len(all_novels)})
+                try:
+                    resp = api._call_with_retry(
+                        api.api.user_novels, uid, offset=offset)
+                except Exception as e:
+                    write_log(f"user_novels failed: {e}", 'warn')
+                    break
+                items = resp.get('novels', []) if resp else []
+                if not items:
+                    break
+                all_novels.extend(items)
+                offset += 30
+                page += 1
+                time.sleep(delay)
+
             is_accept = None
             if all_illusts:
                 is_accept = all_illusts[0].get('user', {}) \
                     .get('is_accept_request')
-            return detail, all_illusts, is_accept
+            return detail, all_illusts, all_novels, is_accept
 
         try:
-            detail, all_illusts, is_accept = \
+            detail, all_illusts, all_novels, is_accept = \
                 await loop.run_in_executor(None, do_user)
         except Exception as e:
             await ws.send_str(json.dumps(
@@ -3081,6 +3170,7 @@ async def handle_command(bridge, cmd, ws):
                 {'type': 'error',
                  'msg': 'User not found or inaccessible'}))
             return
+
         user_info = format_user_detail(
             detail, extra={'is_accept_request': is_accept})
         items = []
@@ -3088,9 +3178,31 @@ async def handle_command(bridge, cmd, ws):
             f = format_item(it)
             f['_slim_illust'] = it
             items.append(f)
+        novel_items = []
+        for it in all_novels:
+            f = format_novel(it)
+            f['_slim_illust'] = it
+            novel_items.append(f)
+
         await ws.send_str(json.dumps({
             'type': 'user_detail_result',
-            'user': user_info, 'items': items}, ensure_ascii=False))
+            'user': user_info,
+            'items': items,
+            'novel_items': novel_items,
+            'fetched_at': int(time.time() * 1000)},
+            ensure_ascii=False))
+
+        bridge.session.update_ui_state({
+            'active_tab': 'user-detail',
+            'user_detail': {
+                'uid': uid,
+                'user': user_info,
+                'items': items[:500],
+                'novel_items': novel_items[:500],
+                'pane': 'illust',
+                'fetched_at': int(time.time() * 1000),
+            },
+        })
 
     elif c == 'novel_detail':
         try:
@@ -3287,7 +3399,14 @@ async def handle_command(bridge, cmd, ws):
         await ws.send_str(json.dumps({
             'type': 'recommend_result', 'items': formatted, 'mode': mode},
             ensure_ascii=False))
-
+        bridge.session.update_ui_state({
+            'active_tab': 'recommend',
+            'recommend': {
+                'mode': mode,
+                'items': formatted[:500],
+                'fetched_at': int(time.time() * 1000),
+            },
+        })
     # ---------- Follow new ----------
     elif c == 'follow_new':
         offset = int(cmd.get('offset', 0))
@@ -3362,7 +3481,15 @@ async def handle_command(bridge, cmd, ws):
             'offset': offset,
             'batch_size': batch_size,
             'has_more': has_more}, ensure_ascii=False))
-
+        bridge.session.update_ui_state({
+            'active_tab': 'follow',
+            'follow': {
+                'restrict': restrict,
+                'offset': offset,
+                'items': formatted[:500],
+                'fetched_at': int(time.time() * 1000),
+            },
+        })
     # ---------- Account ----------
     elif c in ('get_account', 'refresh_account'):
         force = (c == 'refresh_account')

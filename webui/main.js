@@ -11,10 +11,12 @@ const filterSets = {
     "recommend-tag-cloud": new Set(),
 };
 let hasRestoredUiState = false;
-
+let hasInitialRouteApplied = false;
 let parsedBookmarkUrls = [];
 let rankingItems = [],
     rankingItemsAll = [];
+let rankingShownMode = "";
+let rankingShownDate = "";
 let recommendItemsAll = [];
 let searchIllustItems = [],
     searchIllustItemsRaw = [];
@@ -24,6 +26,17 @@ let searchActivePane = "illust";
 let searchCurrentTag = "";
 let searchTotal = 0;
 let searchRelatedTags = [];
+let searchDataKey = "";
+
+function computeSearchKey(tag, target, sort, page, pages) {
+    return [
+        tag || "",
+        target || "exact_match_for_tags",
+        sort || "date_desc",
+        page || 1,
+        pages || 1,
+    ].join("|");
+}
 let userSearchItems = [];
 let recommendItems = [],
     followItems = [],
@@ -39,6 +52,9 @@ let followCurrentOffset = 0;
 let followBatchSize = 300;
 let isConnected = false;
 let queueItems = [];
+let userDetailNovelAll = [];
+let userDetailNovel = [];
+let userDetailActivePane = "illust";
 let dlItemsExpanded = false;
 let lastQueueState = {
     queue: 0,
@@ -80,9 +96,32 @@ const tableItemGetters = {
     "recommend-list": () => recommendItems,
     "follow-list": () => followItems,
     "user-detail-list": () => userDetailItems,
+    "following-list": () => followingItems,
     "account-bookmarks": () =>
         currentAccountProfile ? currentAccountProfile.bookmarks || [] : [],
 };
+
+const TAB_TO_ROUTE = {
+    recommend: "recommended",
+    follow: "followed_new",
+    ranking: "ranking",
+    search: "search",
+    download: "downloads",
+    account: "accounts",
+    settings: "settings",
+};
+const ROUTE_TO_TAB = {
+    recommended: "recommend",
+    followed_new: "follow",
+    ranking: "ranking",
+    search: "search",
+    downloads: "download",
+    accounts: "account",
+    settings: "settings",
+    users: "user-detail",
+};
+
+let _lastAppliedRouteKey = "";
 
 // ============ WebSocket ============
 let ws = null;
@@ -143,18 +182,121 @@ function send(obj) {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
     else toast(t("toast_no_connection"), "error");
 }
+// ============ HashLink Routing ============
+function parseHash() {
+    const raw = location.hash.slice(1);
+    if (!raw || raw === "/")
+        return { route: "recommended", params: {}, uid: null };
+    const parts = raw.split("/").filter((p) => p !== "");
+    const route = parts[0];
+    if (route === "users") {
+        const uid = parseInt(parts[1]) || null;
+        return { route, params: {}, uid };
+    }
+    const params = {};
+    if (parts.length > 1) {
+        parts
+            .slice(1)
+            .join("/")
+            .split("&")
+            .forEach((p) => {
+                if (!p) return;
+                const eq = p.indexOf("=");
+                if (eq < 0) params[decodeURIComponent(p)] = "";
+                else
+                    params[decodeURIComponent(p.slice(0, eq))] =
+                        decodeURIComponent(p.slice(eq + 1));
+            });
+    }
+    return { route, params, uid: null };
+}
 
+function buildHash(route, params = {}, uid = null) {
+    if (route === "users") return uid ? `#users/${uid}/` : "#users/";
+    const entries = Object.entries(params)
+        .filter(([_, v]) => v !== undefined && v !== null && v !== "")
+        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`);
+    return `#${route}/` + (entries.length ? entries.join("&") : "");
+}
+
+function setRoute(route, params = {}, uid = null) {
+    const newHash = buildHash(route, params, uid);
+    if (location.hash === newHash) {
+        applyRouteFromHash();
+    } else {
+        history.pushState(null, "", newHash);
+        applyRouteFromHash();
+    }
+}
+function applyRouteFromHash() {
+    const { route, params, uid } = parseHash();
+    const tab = ROUTE_TO_TAB[route] || "recommend";
+
+    // 切 DOM
+    document
+        .querySelectorAll("nav button")
+        .forEach((b) => b.classList.remove("active"));
+    document
+        .querySelectorAll(".tab")
+        .forEach((t) => t.classList.remove("active"));
+    const navBtn = document.querySelector(`nav button[data-tab="${tab}"]`);
+    if (navBtn) navBtn.classList.add("active");
+    document.getElementById("tab-" + tab)?.classList.add("active");
+    applyUserBgVisibility();
+    updateSelectionCount();
+
+    // 参数去重
+    const key = `${route}|${JSON.stringify(params)}|${uid || ""}`;
+    if (key === _lastAppliedRouteKey) return;
+    _lastAppliedRouteKey = key;
+
+    // 通知后端读取会话
+    const pagesWithState = [
+        "recommended",
+        "followed_new",
+        "ranking",
+        "search",
+        "users",
+    ];
+    if (pagesWithState.includes(route)) {
+        send({ cmd: "get_ui_state" });
+    }
+
+    // 分发到页面逻辑
+    if (route === "recommended") onRouteRecommend(params);
+    else if (route === "followed_new") onRouteFollow(params);
+    else if (route === "ranking") onRouteRanking(params);
+    else if (route === "search") onRouteSearch(params);
+    else if (route === "users") onRouteUsers(uid);
+}
+
+window.addEventListener("hashchange", applyRouteFromHash);
+
+function ensureHash() {
+    if (!location.hash || location.hash === "#") {
+        history.replaceState(null, "", "#recommended/");
+    }
+    applyRouteFromHash();
+}
 // ============ Message handling ============
 function handleMessage(msg) {
     switch (msg.type) {
         case "init":
             fillConfig(msg.config);
             updateQueueStatus(msg);
-            if (msg.ui_state) restoreUiState(msg.ui_state);
             if (msg.config.theme) applyTheme(msg.config.theme);
+            if (msg.ui_state && !hasRestoredUiState) {
+                restoreUiState(msg.ui_state);
+                hasRestoredUiState = true;
+            }
             if (msg.items) {
                 queueItems = msg.items;
                 renderQueueItems();
+            }
+            if (!hasInitialRouteApplied) {
+                hasInitialRouteApplied = true;
+                _lastAppliedRouteKey = "";
+                ensureHash();
             }
             break;
 
@@ -322,6 +464,9 @@ function handleMessage(msg) {
             break;
         case "novel_series_result":
             renderNovelSeries(msg.items);
+            break;
+        case "ui_state":
+            if (msg.state) restoreUiState(msg.state);
             break;
     }
 }
@@ -765,6 +910,13 @@ const TABLE_COLUMNS = {
         { key: "tags", get: "th_tags", numeric: false },
         { key: "date", get: "th_date", numeric: false },
     ],
+    "following-list": [
+        { key: "id", get: "th_uid", numeric: true },
+        { key: "name", get: "th_name", numeric: false },
+        { key: "account", get: "th_account", numeric: false },
+        { key: "is_followed", get: "th_followed", numeric: false },
+    ],
+    "account-bookmarks": WORK_COLUMNS,
 };
 
 const sortState = {
@@ -774,6 +926,8 @@ const sortState = {
     "recommend-list": { col: null, asc: true },
     "follow-list": { col: null, asc: true },
     "user-detail-list": { col: null, asc: true },
+    "following-list": { col: null, asc: true },
+    "account-bookmarks": { col: null, asc: true },
 };
 
 function getSortValue(item, key) {
@@ -781,15 +935,7 @@ function getSortValue(item, key) {
         case "id":
             return item.id || 0;
         case "title":
-            if (it.type === "novel") {
-                tds += `<td data-col="title">
-                                <a href="#" class="illust-title-link"
-                                   data-action="open-novel" data-idx="${idx}"
-                                   title="${t("iv_open_pixiv")}">${escapeHtml(truncate(it.title || "", 40))}</a>${badges}</td>`;
-            } else {
-                tds += `<td data-col="title">${titleHtml}</td>`;
-            }
-            break;
+            return (item.title || "").toLowerCase();
         case "page_count":
             return item.page_count || 1;
         case "author":
@@ -855,7 +1001,10 @@ function applySort(containerId) {
 }
 
 // ============ Table render ============
-function renderTable(containerId, items) {
+function renderTable(containerId, items, opts) {
+    const selectable = opts ? opts.selectable !== false : true;
+    const avatarField = opts ? opts.avatarField || null : null;
+
     const container = document.getElementById(containerId);
     if (!container) {
         console.warn("renderTable: container not found:", containerId);
@@ -876,29 +1025,32 @@ function renderTable(containerId, items) {
     }
 
     const selectedPids = new Set();
-    container.querySelectorAll("tr.selected").forEach((tr) => {
-        const idTd = tr.querySelector('td[data-col="id"]');
-        if (idTd) selectedPids.add(idTd.textContent.trim());
-    });
+    if (selectable) {
+        container.querySelectorAll("tr.selected").forEach((tr) => {
+            const idTd = tr.querySelector('td[data-col="id"]');
+            if (idTd) selectedPids.add(idTd.textContent.trim());
+        });
+    }
 
     const state = sortState[containerId];
     const cols = TABLE_COLUMNS[containerId];
 
-    const thead =
-        '<th class="col-checkbox"></th>' +
-        cols
-            .map((c) => {
-                const sortable = c.sortable !== false;
-                const indicator =
-                    state.col === c.key ? (state.asc ? " ▲" : " ▼") : "";
-                const cls = sortable ? "sortable-th" : "";
-                const align = c.numeric ? ' style="text-align:right"' : "";
-                const onclick = sortable
-                    ? ` onclick="sortTable('${containerId}', '${c.key}')"`
-                    : "";
-                return `<th${align} class="${cls}"${onclick}>${t(c.get)}${indicator}</th>`;
-            })
-            .join("");
+    let thead = "";
+    if (selectable) thead += '<th class="col-checkbox"></th>';
+    if (avatarField) thead += '<th class="col-avatar"></th>';
+    thead += cols
+        .map((c) => {
+            const sortable = c.sortable !== false;
+            const indicator =
+                state.col === c.key ? (state.asc ? " ▲" : " ▼") : "";
+            const cls = sortable ? "sortable-th" : "";
+            const align = c.numeric ? ' style="text-align:right"' : "";
+            const onclick = sortable
+                ? ` onclick="sortTable('${containerId}', '${c.key}')"`
+                : "";
+            return `<th${align} class="${cls}"${onclick}>${t(c.get)}${indicator}</th>`;
+        })
+        .join("");
 
     const rows = items
         .map((it, idx) => {
@@ -934,14 +1086,30 @@ function renderTable(containerId, items) {
                        data-idx="${idx}"
                        title="${t("iv_open_pixiv")}">${escapeHtml(truncate(it.title || "", 40))}</a>${badges}`;
 
-            let tds = `<td class="col-checkbox">
-            <img class="row-checkbox"
-                 src="/ui_icons/${isSelected ? "selected" : "unselected"}.svg"
-                 alt=""
-                 data-action="toggle-checkbox"
-                 data-container="${containerId}"
-                 data-idx="${idx}">
-        </td>`;
+            let tds = "";
+            if (selectable) {
+                tds += `<td class="col-checkbox">
+                    <img class="row-checkbox"
+                         src="/ui_icons/${isSelected ? "selected" : "unselected"}.svg"
+                         alt=""
+                         data-action="toggle-checkbox"
+                         data-container="${containerId}"
+                         data-idx="${idx}">
+                </td>`;
+            }
+            if (avatarField) {
+                const av = it[avatarField];
+                if (av) {
+                    tds += `<td class="col-avatar">
+                        <img class="account-list-avatar"
+                             src="/proxy_image?url=${encodeURIComponent(av)}"
+                             alt=""
+                             onerror="this.onerror=null; this.removeAttribute('src');">
+                    </td>`;
+                } else {
+                    tds += `<td class="col-avatar"><div class="account-list-avatar"></div></td>`;
+                }
+            }
 
             for (const c of cols) {
                 switch (c.key) {
@@ -958,9 +1126,9 @@ function renderTable(containerId, items) {
                         if (it.author_id) {
                             tds += `<td data-col="author"><a href="#" class="user-link"
                             data-action="open-user" data-uid="${it.author_id}"
-                            title="${t("th_author_link")}">${escapeHtml(it.author)}</a></td>`;
+                            title="${t("th_author_link")}">${escapeHtml(it.author || "")}</a></td>`;
                         } else {
-                            tds += `<td data-col="author">${escapeHtml(it.author)}</td>`;
+                            tds += `<td data-col="author">${escapeHtml(it.author || "")}</td>`;
                         }
                         break;
                     case "views":
@@ -977,6 +1145,21 @@ function renderTable(containerId, items) {
                         break;
                     case "date":
                         tds += `<td data-col="date">${it.date || ""}</td>`;
+                        break;
+                    case "name":
+                        if (it.id) {
+                            tds += `<td data-col="name"><a href="#" class="user-link"
+                                data-action="open-user" data-uid="${it.id}"
+                                title="${t("th_user_detail_link")}">${escapeHtml(it.name || "")}</a></td>`;
+                        } else {
+                            tds += `<td data-col="name">${escapeHtml(it.name || "")}</td>`;
+                        }
+                        break;
+                    case "account":
+                        tds += `<td data-col="account" style="color:var(--text-tertiary)">${escapeHtml(it.account || "")}</td>`;
+                        break;
+                    case "is_followed":
+                        tds += `<td data-col="is_followed">${it.is_followed ? `<span style="color:var(--success)">${t("th_followed_yes")}</span>` : ""}</td>`;
                         break;
                 }
             }
@@ -1107,19 +1290,9 @@ function onTagClick(evt, el) {
 
 // ============ Nav ============
 function switchTab(tabName) {
-    document
-        .querySelectorAll("nav button")
-        .forEach((b) => b.classList.remove("active"));
-    document
-        .querySelectorAll(".tab")
-        .forEach((t) => t.classList.remove("active"));
-    const navBtn = document.querySelector(`nav button[data-tab="${tabName}"]`);
-    if (navBtn) navBtn.classList.add("active");
-    const tabEl = document.getElementById("tab-" + tabName);
-    if (tabEl) tabEl.classList.add("active");
-    applyUserBgVisibility();
-    updateSelectionCount();
-    scheduleUiStateSave();
+    const route = TAB_TO_ROUTE[tabName] || tabName;
+    if (route === "user-detail") return;
+    setRoute(route);
 }
 
 document.querySelectorAll("nav button").forEach((btn) => {
@@ -1127,6 +1300,37 @@ document.querySelectorAll("nav button").forEach((btn) => {
 });
 
 // ============ Search ============
+function onRouteSearch(params) {
+    const tag = params.tag || "";
+    if (!tag) return;
+
+    setEl("search-tag", (el) => (el.value = tag));
+    if (params.mode) setEl("search-mode", (el) => (el.value = params.mode));
+    if (params.target)
+        setEl("search-target", (el) => (el.value = params.target));
+    if (params.sort) setEl("search-sort", (el) => (el.value = params.sort));
+    if (params.page) setEl("search-page", (el) => (el.value = params.page));
+    if (params.pages) setEl("search-pages", (el) => (el.value = params.pages));
+
+    const wantKey = computeSearchKey(
+        tag,
+        params.target,
+        params.sort,
+        params.page,
+        params.pages,
+    );
+
+    // 数据已匹配当前 URL → 只渲染，不再请求
+    if (searchDataKey === wantKey) {
+        renderSearchHeaderCard();
+        switchSearchPane(searchActivePane || "illust");
+        return;
+    }
+
+    // 数据不匹配 → 请求
+    doSearch();
+}
+
 function onSearchModeChange() {
     const mode = document.getElementById("search-mode").value;
     setEl(
@@ -1184,9 +1388,10 @@ function doSearch() {
         duration = durationRaw;
     }
 
-    switchTab("search");
+    // 记录本次数据来源 key，onRouteSearch 用它判断「是否需要重新请求」
+    searchDataKey = computeSearchKey(tag, target, sort, startPage, pages);
 
-    // 加载态：直接写进新容器
+    // 加载态
     setEl(
         "search-list-illust",
         (el) =>
@@ -1212,6 +1417,15 @@ function doSearch() {
             ugoira: fUgoira,
             novel: fNovel,
         },
+    });
+
+    setRoute("search", {
+        tag,
+        mode: "illust",
+        target,
+        sort,
+        page: startPage,
+        pages,
     });
 }
 
@@ -1464,36 +1678,9 @@ function applySearchBookmarkFilter(startPage, pages) {
 }
 
 function onSearchBarFocus() {
-    // 已有任何搜索结果就切过去；否则只切 tab 停留在搜索页
-    const active = document.querySelector("nav button.active")?.dataset.tab;
-    if (active === "search") return;
-
-    // 搜索 tab 没有对应的 nav 按钮，直接调用 switchTab
+    const activeTab = getActiveTab();
+    if (activeTab === "search") return;
     switchTab("search");
-}
-
-function switchTab(tabName) {
-    const prevNav = document.querySelector("nav button.active")?.dataset.tab;
-
-    document
-        .querySelectorAll("nav button")
-        .forEach((b) => b.classList.remove("active"));
-    document
-        .querySelectorAll(".tab")
-        .forEach((t) => t.classList.remove("active"));
-
-    let navTab = tabName;
-    if (tabName === "search") {
-        navTab = prevNav || "recommend";
-    }
-    const navBtn = document.querySelector(`nav button[data-tab="${navTab}"]`);
-    if (navBtn) navBtn.classList.add("active");
-
-    const tabEl = document.getElementById("tab-" + tabName);
-    if (tabEl) tabEl.classList.add("active");
-    applyUserBgVisibility();
-    updateSelectionCount();
-    scheduleUiStateSave();
 }
 
 function doSearchFromTopbar() {
@@ -1604,11 +1791,101 @@ function renderUserSearchResults(items) {
 }
 
 // ============ Ranking ============
+let rankingCurrentMode = "day";
+let rankingCurrentDate = "";
+let rankingFetchedAt = 0;
+
+function updateRankingTabsUI() {
+    document.querySelectorAll(".ranking-type-tab").forEach((b) => {
+        b.classList.toggle("active", b.dataset.type === rankingCurrentMode);
+    });
+    setEl(
+        "ranking-date-bar",
+        (el) => (el.style.display = rankingCurrentMode === "day" ? "" : "none"),
+    );
+}
+
+function buildRankingDateOptions() {
+    const sel = document.getElementById("ranking-date-select");
+    if (!sel) return;
+    const opts = [];
+    const today = new Date();
+    for (let i = 0; i < 7; i++) {
+        const d = new Date(today);
+        d.setDate(today.getDate() - i);
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, "0");
+        const day = String(d.getDate()).padStart(2, "0");
+        const v = `${y}-${m}-${day}`;
+        opts.push(`<option value="${v}">${v}</option>`);
+    }
+    sel.innerHTML = opts.join("");
+}
+
+function onRankingTypeClick(mode) {
+    if (rankingCurrentMode === mode) return;
+    rankingCurrentMode = mode;
+    updateRankingTabsUI();
+    if (mode === "day") {
+        rankingCurrentDate =
+            document.getElementById("ranking-date-select")?.value || "";
+    } else {
+        rankingCurrentDate = "";
+    }
+    setRoute("ranking", { mode: rankingCurrentMode, date: rankingCurrentDate });
+}
+
+function onRankingDateChange() {
+    rankingCurrentDate =
+        document.getElementById("ranking-date-select")?.value || "";
+    setRoute("ranking", { mode: rankingCurrentMode, date: rankingCurrentDate });
+}
+
+function onRouteRanking(params) {
+    const newMode = params.mode || "day";
+    const newDate = params.date || "";
+
+    // 先看当前显示的数据是不是这个类型
+    const sameAsShown =
+        newMode === rankingShownMode && newDate === rankingShownDate;
+    const isEmpty = rankingItemsAll.length === 0;
+    const isStale = isRankingExpired(rankingFetchedAt);
+
+    // 更新 UI 状态
+    rankingCurrentMode = newMode;
+    rankingCurrentDate = newDate;
+    updateRankingTabsUI();
+    if (newMode === "day" && newDate) {
+        setEl("ranking-date-select", (el) => (el.value = newDate));
+    }
+
+    // 类型不同 / 无数据 / 过期 → 都需拉取
+    if (!sameAsShown || isEmpty || isStale) {
+        fetchRanking();
+    }
+}
+
 function fetchRanking() {
-    const mode = document.getElementById("ranking-mode").value;
-    setRankingLoading(mode, "");
-    document.getElementById("btn-fetch-ranking").disabled = true;
-    send({ cmd: "ranking", mode, limit: 480 });
+    setRankingLoading("loading", "");
+    send({
+        cmd: "ranking",
+        mode: rankingCurrentMode,
+        date: rankingCurrentDate,
+    });
+}
+
+function renderRankingResults(items, stats) {
+    rankingItemsAll = items || [];
+    rankingItems = rankingItemsAll.slice();
+    rankingFetchedAt = Date.now();
+    rankingShownMode = rankingCurrentMode;
+    rankingShownDate = rankingCurrentDate;
+
+    filterSets["ranking-tag-cloud"].clear();
+    buildTagCloud("ranking-tag-cloud", rankingItems, "filterRankingByTags");
+    renderTable("ranking-list", rankingItems);
+    setEl("ranking-status", (el) => (el.textContent = ""));
+    scheduleUiStateSave();
 }
 
 function setRankingLoading(phase, count) {
@@ -1621,28 +1898,6 @@ function setRankingLoading(phase, count) {
         "ranking-status",
         (el) => (el.textContent = t("status_requesting", `${phase}: ${count}`)),
     );
-}
-
-function renderRankingResults(items, stats) {
-    rankingItemsAll = items;
-    filterSets["ranking-tag-cloud"].clear();
-    rankingItems = items.slice();
-    buildTagCloud("ranking-tag-cloud", items, "filterRankingByTags");
-    renderTable("ranking-list", rankingItems);
-    document.getElementById("btn-fetch-ranking").disabled = false;
-
-    const todayCount = stats?.today ?? items.length;
-    const yCount = stats?.yesterday ?? 0;
-    const newCount = stats?.new ?? 0;
-    setEl(
-        "ranking-status",
-        (el) => (el.textContent = t("status_done_ranking", todayCount)),
-    );
-    toast(
-        `${t("toast_ranking_done", todayCount)} · NEW ${newCount} (y: ${yCount})`,
-        "success",
-    );
-    scheduleUiStateSave();
 }
 
 function filterRankingByTags() {
@@ -1731,19 +1986,16 @@ function applyFollowFilter() {
 }
 
 // ============ Follow new ============
-function loadFollowNew(offset) {
-    const restrict = document.getElementById("follow-restrict").value;
-    setFollowLoading(0);
-    document.getElementById("btn-load-follow").disabled = true;
-    send({ cmd: "follow_new", offset, restrict });
-}
+let followFetchedAt = 0;
 
-function setFollowLoading(count) {
-    setEl(
-        "follow-list",
-        (el) =>
-            (el.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_follow")} (${count})</div>`),
-    );
+function onRouteFollow(params) {
+    const restrict = params.restrict || "all";
+    const offset = parseInt(params.offset) || 0;
+    setEl("follow-restrict", (el) => (el.value = restrict));
+    followCurrentOffset = offset;
+    if (followItemsAll.length === 0 || isExpired(followFetchedAt)) {
+        loadFollowNew(offset);
+    }
 }
 
 function renderFollowResults(items, offset, hasMore, batchSize) {
@@ -1785,7 +2037,22 @@ function renderFollowResults(items, offset, hasMore, batchSize) {
     } else {
         toast(t("toast_follow_done", items.length), "success");
     }
+    followFetchedAt = Date.now();
     scheduleUiStateSave();
+}
+
+function loadFollowNew(offset) {
+    const restrict = document.getElementById("follow-restrict").value;
+    setFollowLoading(0);
+    send({ cmd: "follow_new", offset, restrict });
+}
+
+function setFollowLoading(count) {
+    setEl(
+        "follow-list",
+        (el) =>
+            (el.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_follow")} (${count})</div>`),
+    );
 }
 
 function followPrevPage() {
@@ -1798,6 +2065,18 @@ function followNextPage() {
 }
 
 // ============ Recommend ============
+function onRouteRecommend(params) {
+    const mode = params.mode || "auto";
+    const pid = params.pid ? parseInt(params.pid) : null;
+    if (mode === "work") {
+        if (!pid) return;
+        setEl("recommend-pid", (el) => (el.value = pid));
+        if (recommendItems.length === 0) doRecommend("work");
+        return;
+    }
+    if (recommendItems.length === 0) doRecommend(mode);
+}
+
 function doRecommend(mode) {
     let pid = null;
     if (mode === "work") {
@@ -1819,6 +2098,9 @@ function doRecommend(mode) {
 
     const cmd = { cmd: "recommend", mode, limit: 120 };
     if (pid) cmd.pid = pid;
+    const params = { mode };
+    if (mode === "work" && pid) params.pid = pid;
+    setRoute("recommended", params);
     send(cmd);
 }
 
@@ -1921,31 +2203,74 @@ function submitAdvancedRecommend() {
 }
 
 // ============ User detail ============
-function openUserDetail(uid) {
+function switchUserDetailPane(pane) {
+    if (pane !== "illust" && pane !== "novel") return;
+    userDetailActivePane = pane;
     document
-        .querySelectorAll("nav button")
+        .querySelectorAll("#udetail-pane-tabs .search-pane-tab")
         .forEach((b) => b.classList.remove("active"));
     document
-        .querySelectorAll(".tab")
-        .forEach((t) => t.classList.remove("active"));
-    const navBtn = document.querySelector('nav button[data-tab="user-detail"]');
-    if (navBtn) navBtn.classList.add("active");
-    document.getElementById("tab-user-detail").classList.add("active");
-    document.body.classList.remove("has-user-bg");
+        .getElementById(`udetail-pane-tab-${pane}`)
+        ?.classList.add("active");
+    document
+        .querySelectorAll("#tab-user-detail .search-result-pane")
+        .forEach((p) => p.classList.remove("active"));
+    document
+        .getElementById(`user-detail-pane-${pane}`)
+        ?.classList.add("active");
+}
 
-    setEl("udetail-uid", (el) => (el.value = uid));
-    resetUserDetailView();
+function renderUserDetail(user, items, novelItems) {
+    if (!user || !user.id) {
+        setEl(
+            "udetail-header",
+            (el) =>
+                (el.innerHTML = `<div class="empty-msg">${t("account_load_failed")}</div>`),
+        );
+        setEl("btn-load-udetail", (el) => (el.disabled = false));
+        return;
+    }
+    userDetailUid = user.id;
+    renderUserHeaderOnly(user);
+    setEl("udetail-uid", (el) => (el.value = user.id));
 
+    userDetailAllItems = items || [];
+    userDetailItems = userDetailAllItems.slice();
+    userDetailNovelAll = novelItems || [];
+    userDetailNovel = userDetailNovelAll.slice();
+
+    buildTagCloud(
+        "udetail-tag-cloud",
+        userDetailItems,
+        "applyUserDetailFilter",
+    );
+    renderTable("user-detail-list", userDetailItems);
+    renderTable("user-detail-novel-list", userDetailNovel);
+    switchUserDetailPane("illust");
+    scheduleUiStateSave();
+}
+
+function openUserDetail(uid) {
+    if (!uid) return;
+    setRoute("users", {}, uid);
+}
+
+function onRouteUsers(uid) {
+    if (!uid) return;
+    if (userDetailUid === uid && userDetailAllItems.length) {
+        // 已有数据，直接显示
+        return;
+    }
+    // 请求
     setEl(
         "udetail-header",
         (el) =>
             (el.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_user")}</div>`),
     );
     setEl("udetail-status", (el) => (el.textContent = `UID: ${uid}`));
-    document.getElementById("btn-load-udetail").disabled = true;
+    setEl("btn-load-udetail", (el) => (el.disabled = true));
     send({ cmd: "user_detail", uid });
 }
-
 function resetUserDetailView() {
     userDetailUid = null;
     userDetailItems = [];
@@ -2066,27 +2391,6 @@ function applyUserBgVisibility() {
     if (activeTab === "user-detail" && hasBg)
         document.body.classList.add("has-user-bg");
     else document.body.classList.remove("has-user-bg");
-}
-
-function renderUserDetail(user, items) {
-    userDetailUid = user.id;
-    renderUserHeaderOnly(user);
-    setEl("udetail-uid", (el) => (el.value = user.id));
-    setEl(
-        "udetail-status",
-        (el) =>
-            (el.textContent = t(
-                "status_done",
-                `${user.name} (${items.length})`,
-            )),
-    );
-
-    userDetailAllItems = items.slice();
-    userDetailItems = items.slice();
-    buildTagCloud("udetail-tag-cloud", items, "applyUserDetailFilter");
-    renderTable("user-detail-list", userDetailItems);
-    toast(t("toast_user_detail_done", items.length), "success");
-    scheduleUiStateSave();
 }
 
 function applyUserDetailFilter() {
@@ -2352,7 +2656,6 @@ function renderIllustViewer() {
         const cls = it.restriction.toLowerCase().replace("-", "");
         badges += `<span class="badge ${cls}">${it.restriction}</span>`;
     }
-    setEl("iv-badges", (el) => (el.innerHTML = badges));
 
     const metaParts = [];
     if (it.date) metaParts.push(escapeHtml(it.date));
@@ -2702,7 +3005,6 @@ document.addEventListener("click", (e) => {
         closeIllustViewer();
     }
 });
-
 
 // ============ Queue / download tab ============
 function toggleDownloadItems() {
@@ -3263,72 +3565,117 @@ function scheduleUiStateSave() {
 }
 
 function saveUiState() {
-    const state = {
-        active_tab: getActiveTab(),
-        theme: document.documentElement.getAttribute("data-theme") || "dark",
-        ranking: {
-            mode: document.getElementById("ranking-mode")?.value,
-            items: rankingItemsAll.slice(0, 500),
-        },
-        search: {
-            mode: document.getElementById("search-mode")?.value,
-            tag: searchCurrentTag,
-            sort: document.getElementById("search-sort")?.value,
-            page: document.getElementById("search-page")?.value,
-            pages: document.getElementById("search-pages")?.value,
-            target: document.getElementById("search-target")?.value,
-            duration: document.getElementById("search-duration")?.value,
-            pane: searchActivePane,
-            illust_items: searchIllustItemsRaw.slice(0, 500),
-            novel_items: searchNovelItemsRaw.slice(0, 500),
-        },
-        recommend: { items: recommendItems.slice(0, 500) },
-        follow: {
-            restrict: document.getElementById("follow-restrict")?.value,
-            offset: followCurrentOffset,
-            items: followItemsAll.slice(0, 500),
-        },
-        user_detail: {
-            uid: userDetailUid,
-            user: currentUserDetail ? { ...currentUserDetail } : null,
-            items: userDetailAllItems.slice(0, 500),
-        },
-    };
-    send({ cmd: "save_ui_state", state });
+    send({ cmd: "save_ui_state", state: { active_tab: getActiveTab() } });
+}
+function isExpired(fetchedAt, hours = 4) {
+    if (!fetchedAt) return true;
+    return Date.now() - fetchedAt > hours * 3600 * 1000;
+}
+
+function isRankingExpired(fetchedAt) {
+    if (!fetchedAt) return true;
+    const nowJST = Date.now() + 9 * 3600 * 1000;
+    const todayNoonJST =
+        Math.floor(nowJST / 86400000) * 86400000 + 12 * 3600 * 1000;
+    const lastNoonJST =
+        nowJST >= todayNoonJST ? todayNoonJST : todayNoonJST - 86400000;
+    const fetchedJST = fetchedAt + 9 * 3600 * 1000;
+    return fetchedJST < lastNoonJST;
 }
 
 function restoreUiState(state) {
     if (!state) return;
-    if (state.theme) applyTheme(state.theme);
 
-    if (state.ranking?.mode) {
-        setEl("ranking-mode", (el) => (el.value = state.ranking.mode));
-    }
-    if (state.ranking?.items?.length) {
-        rankingItemsAll = state.ranking.items;
-        rankingItems = rankingItemsAll.slice();
-        buildTagCloud("ranking-tag-cloud", rankingItems, "filterRankingByTags");
-        renderTable("ranking-list", rankingItems);
-    }
-
-    if (state.search?.tag)
-        setEl("search-tag", (el) => (el.value = state.search.tag));
-
-    if (
-        state.search?.illust_items?.length ||
-        state.search?.novel_items?.length
-    ) {
-        searchIllustItemsRaw = state.search.illust_items || [];
-        searchNovelItemsRaw = state.search.novel_items || [];
-        searchCurrentTag = state.search.tag || "";
-        searchIllustItems = searchIllustItemsRaw.slice();
-        searchNovelItems = searchNovelItemsRaw.slice();
-        renderTable("search-list-illust", searchIllustItems);
-        renderTable("search-list-novel", searchNovelItems);
-        setEl("search-pane-tabs", (el) => (el.style.display = ""));
-        switchSearchPane(state.search.pane || "illust");
+    // Ranking
+    if (state.ranking) {
+        const r = state.ranking;
+        rankingFetchedAt = r.fetched_at || 0;
+        rankingCurrentMode = r.mode || "day";
+        rankingCurrentDate = r.date || "";
+        rankingShownMode = r.mode || "";
+        rankingShownDate = r.date || "";
+        if (r.items?.length) {
+            rankingItemsAll = r.items;
+            rankingItems = rankingItemsAll.slice();
+            buildTagCloud(
+                "ranking-tag-cloud",
+                rankingItems,
+                "filterRankingByTags",
+            );
+            renderTable("ranking-list", rankingItems);
+        }
+        updateRankingTabsUI();
     }
 
+    // Follow
+    if (state.follow) {
+        const f = state.follow;
+        followFetchedAt = f.fetched_at || 0;
+        followItemsAll = f.items || [];
+        followItems = followItemsAll.slice();
+        followCurrentOffset = f.offset || 0;
+        if (f.restrict)
+            setEl("follow-restrict", (el) => {
+                el.addEventListener("change", () => {
+                    setRoute("followed_new", {
+                        restrict: el.value,
+                        offset: followCurrentOffset,
+                    });
+                });
+            });
+        if (followItemsAll.length) {
+            buildTagCloud(
+                "follow-tag-cloud",
+                followItems,
+                "applyFollowFilter",
+                "tags",
+            );
+            buildTagCloud(
+                "follow-author-cloud",
+                followItems,
+                "applyFollowFilter",
+                "author",
+            );
+            renderTable("follow-list", followItems);
+        }
+    }
+
+    // Search
+        if (state.search) {
+            const s = state.search;
+            searchCurrentTag = s.tag || "";
+            searchTotal = (s.header && s.header.total) || 0;
+            searchRelatedTags = (s.header && s.header.related_tags) || [];
+            searchIllustItemsRaw = s.illust_items || [];
+            searchNovelItemsRaw = s.novel_items || [];
+            searchIllustItems = searchIllustItemsRaw.slice();
+            searchNovelItems = searchNovelItemsRaw.slice();
+
+            // 恢复后同步 key，确保刷新页面 / 进入 #search/tag=X 时不会重复请求
+            searchDataKey = computeSearchKey(
+                s.tag || "",
+                s.target || "exact_match_for_tags",
+                s.sort || "date_desc",
+                s.page || 1,
+                s.pages || 1,
+            );
+
+            if (s.tag) setEl("search-tag", (el) => (el.value = s.tag));
+            if (s.sort) setEl("search-sort", (el) => (el.value = s.sort));
+            if (s.target) setEl("search-target", (el) => (el.value = s.target));
+            if (s.page) setEl("search-page", (el) => (el.value = s.page));
+            if (s.pages) setEl("search-pages", (el) => (el.value = s.pages));
+
+            if (searchIllustItemsRaw.length || searchNovelItemsRaw.length) {
+                renderSearchHeaderCard();
+                renderTable("search-list-illust", searchIllustItems);
+                renderTable("search-list-novel", searchNovelItems);
+                setEl("search-pane-tabs", (el) => (el.style.display = ""));
+                switchSearchPane(s.pane || "illust");
+            }
+        }
+
+    // Recommend
     if (state.recommend?.items?.length) {
         recommendItemsAll = state.recommend.items;
         recommendItems = recommendItemsAll.slice();
@@ -3340,32 +3687,17 @@ function restoreUiState(state) {
         );
     }
 
-    if (state.follow?.items?.length) {
-        followItemsAll = state.follow.items;
-        followItems = followItemsAll.slice();
-        followCurrentOffset = state.follow.offset || 0;
-        buildTagCloud(
-            "follow-tag-cloud",
-            followItems,
-            "applyFollowFilter",
-            "tags",
-        );
-        buildTagCloud(
-            "follow-author-cloud",
-            followItems,
-            "applyFollowFilter",
-            "author",
-        );
-        renderTable("follow-list", followItems);
-    }
-
+    // User detail
     if (state.user_detail?.uid && state.user_detail?.user) {
         userDetailUid = state.user_detail.uid;
         currentUserDetail = state.user_detail.user;
         renderUserHeaderOnly(currentUserDetail);
-        if (state.user_detail.items?.length) {
-            userDetailAllItems = state.user_detail.items;
-            userDetailItems = userDetailAllItems.slice();
+        userDetailAllItems = state.user_detail.items || [];
+        userDetailItems = userDetailAllItems.slice();
+        userDetailNovelAll = state.user_detail.novel_items || [];
+        userDetailNovel = userDetailNovelAll.slice();
+        switchUserDetailPane(state.user_detail.pane || "illust");
+        if (userDetailItems.length) {
             buildTagCloud(
                 "udetail-tag-cloud",
                 userDetailItems,
@@ -3373,16 +3705,7 @@ function restoreUiState(state) {
             );
             renderTable("user-detail-list", userDetailItems);
         }
-    }
-
-    if (state.active_tab) {
-        if (state.active_tab === "search") switchTab("search");
-        else {
-            const btn = document.querySelector(
-                `nav button[data-tab="${state.active_tab}"]`,
-            );
-            if (btn) btn.click();
-        }
+        renderTable("user-detail-novel-list", userDetailNovel);
     }
 }
 
@@ -3413,6 +3736,7 @@ currentLang = detectLang();
 applyTheme(localStorage.getItem("nagato_theme") || "dark");
 applyI18n();
 renderTokenHelp();
-connect();
 renderSearchExtMenu();
+buildRankingDateOptions();
 bindConfigAutoSave();
+connect();

@@ -399,6 +399,8 @@ const I18N = {
         ext_search_google: "Google",
         btn_search_encyclopedia: "外部搜索",
         toast_need_tag_for_encyclopedia: "请先在搜索框输入关键词",
+        ranking_date: "日期:",
+        ranking_loading_date: "加载日期...",
     },
     en: {
         connecting: "Connecting...",
@@ -799,6 +801,8 @@ const I18N = {
         ext_search_google: "Google",
         btn_search_encyclopedia: "External search",
         toast_need_tag_for_encyclopedia: "Please enter a keyword first",
+        ranking_date: "Date:",
+        ranking_loading_date: "Loading date...",
     },
 };
 

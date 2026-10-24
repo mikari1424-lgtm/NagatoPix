@@ -57,10 +57,6 @@
                     <img class="nav-icon" src="/ui_icons/ranking.svg" alt="">
                     <span data-i18n="nav_ranking"></span>
                 </button>
-                <button data-tab="user-detail">
-                    <img class="nav-icon" src="/ui_icons/users.svg" alt="">
-                    <span data-i18n="nav_user_detail"></span>
-                </button>
                 <button data-tab="download">
                     <img class="nav-icon" src="/ui_icons/download.svg" alt="">
                     <span data-i18n="nav_download"></span>
@@ -154,40 +150,45 @@
             </div>
         </section>
 
-        <section class="tab sticky-results" id="tab-ranking">
-            <div class="panel controls">
-                <div class="row">
-                    <label data-i18n="ranking_type"></label>
-                    <select id="ranking-mode">
-                        <option value="day" data-i18n="ranking_day"></option>
-                        <option value="week" data-i18n="ranking_week"></option>
-                        <option value="month" data-i18n="ranking_month"></option>
-                        <option value="day_male" data-i18n="ranking_day_male"></option>
-                        <option value="day_female" data-i18n="ranking_day_female"></option>
-                        <option value="week_original" data-i18n="ranking_week_original"></option>
-                        <option value="week_rookie" data-i18n="ranking_week_rookie"></option>
-                        <option value="day_r18" data-i18n="ranking_day_r18"></option>
-                    </select>
-                    <label data-i18n="label_count"></label>
-                    <span class="fixed-count">480</span>
-                    <button class="primary" onclick="fetchRanking()" id="btn-fetch-ranking"
-                        data-i18n="btn_fetch_ranking"></button>
-                    <span class="status-text" id="ranking-status"></span>
-                </div>
-                <div class="cloud-toggles">
-                    <button class="cloud-toggle-btn" type="button" onclick="toggleTagCloud('ranking-tags', this)">
-                        <img class="expand-arrow" src="/ui_icons/expand.svg" alt="">
-                        <span data-i18n="label_tag_cloud"></span>
-                    </button>
-                </div>
-                <div class="tag-cloud-wrap" id="ranking-tags-wrap" style="display:none">
-                    <div class="tag-cloud" id="ranking-tag-cloud"></div>
-                </div>
-            </div>
-            <div class="panel results-panel">
-                <div id="ranking-list"></div>
-            </div>
-        </section>
+                <section class="tab sticky-results" id="tab-ranking">
+                    <div class="panel controls">
+                        <div class="ranking-type-tabs" id="ranking-type-tabs">
+                            <button class="ranking-type-tab active" data-type="day" onclick="onRankingTypeClick('day')"
+                                data-i18n="ranking_day"></button>
+                            <button class="ranking-type-tab" data-type="week" onclick="onRankingTypeClick('week')"
+                                data-i18n="ranking_week"></button>
+                            <button class="ranking-type-tab" data-type="month" onclick="onRankingTypeClick('month')"
+                                data-i18n="ranking_month"></button>
+                            <button class="ranking-type-tab" data-type="day_male" onclick="onRankingTypeClick('day_male')"
+                                data-i18n="ranking_day_male"></button>
+                            <button class="ranking-type-tab" data-type="day_female" onclick="onRankingTypeClick('day_female')"
+                                data-i18n="ranking_day_female"></button>
+                            <button class="ranking-type-tab" data-type="week_original" onclick="onRankingTypeClick('week_original')"
+                                data-i18n="ranking_week_original"></button>
+                            <button class="ranking-type-tab" data-type="week_rookie" onclick="onRankingTypeClick('week_rookie')"
+                                data-i18n="ranking_week_rookie"></button>
+                            <button class="ranking-type-tab" data-type="day_r18" onclick="onRankingTypeClick('day_r18')"
+                                data-i18n="ranking_day_r18"></button>
+                        </div>
+                        <div class="row" id="ranking-date-bar" style="display:none">
+                            <label data-i18n="ranking_date"></label>
+                            <select id="ranking-date-select" onchange="onRankingDateChange()"></select>
+                            <span class="status-text" id="ranking-status"></span>
+                        </div>
+                        <div class="cloud-toggles">
+                            <button class="cloud-toggle-btn" type="button" onclick="toggleTagCloud('ranking-tags', this)">
+                                <img class="expand-arrow" src="/ui_icons/expand.svg" alt="">
+                                <span data-i18n="label_tag_cloud"></span>
+                            </button>
+                        </div>
+                        <div class="tag-cloud-wrap" id="ranking-tags-wrap" style="display:none">
+                            <div class="tag-cloud" id="ranking-tag-cloud"></div>
+                        </div>
+                    </div>
+                    <div class="panel results-panel">
+                        <div id="ranking-list"></div>
+                    </div>
+                </section>
 
         <section class="tab sticky-results" id="tab-search">
             <div class="panel search-header-card" id="search-header-card" style="display:none">
@@ -245,6 +246,12 @@
                     <span class="status-text" id="udetail-status"></span>
                 </div>
                 <div id="udetail-header" style="margin-top:8px"></div>
+                                <div class="search-pane-tabs" id="udetail-pane-tabs">
+                                    <button class="search-pane-tab active" type="button" id="udetail-pane-tab-illust"
+                                        onclick="switchUserDetailPane('illust')" data-i18n="search_pane_illust"></button>
+                                    <button class="search-pane-tab" type="button" id="udetail-pane-tab-novel" onclick="switchUserDetailPane('novel')"
+                                        data-i18n="search_pane_novel"></button>
+                                </div>
                 <div class="cloud-section collapsed" id="cloud-udetail">
                     <div class="cloud-header" onclick="toggleCloud('cloud-udetail')">
                         <span data-i18n="label_tag_cloud"></span>
@@ -255,9 +262,12 @@
                     <div class="tag-cloud" id="udetail-tag-cloud"></div>
                 </div>
             </div>
-            <div class="panel results-panel">
-                <div id="user-detail-list"></div>
-            </div>
+                        <div class="panel results-panel search-result-pane active" id="user-detail-pane-illust">
+                            <div id="user-detail-list"></div>
+                        </div>
+                        <div class="panel results-panel search-result-pane" id="user-detail-pane-novel">
+                            <div id="user-detail-novel-list"></div>
+                        </div>
         </section>
 
         <section class="tab" id="tab-download">

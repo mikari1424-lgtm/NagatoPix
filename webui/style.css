@@ -669,7 +669,31 @@ tr.selected .row-checkbox {
     margin-right: 4px;
     margin-bottom: 2px;
 }
-
+/* ============ Ranking ===============*/
+.ranking-type-tabs {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 8px;
+}
+.ranking-type-tab {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    padding: 8px 14px;
+    cursor: pointer;
+    font-size: 13px;
+    font-family: inherit;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+}
+.ranking-type-tab:hover { color: var(--text); }
+.ranking-type-tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+    font-weight: 500;
+}
 /* ============ Sticky Results ============ */
 .tab.sticky-results {
     display: none;
@@ -1824,7 +1848,7 @@ button.primary .btn-icon { filter: brightness(0) invert(1); }
     line-height: 1.6;
 }
 
-.col-avatar { width: 44px; min-width: 44px; max-width: 44px; text-align: center; padding: 4px !important; }
+.col-avatar { width: 44px; min-width: 44px; max-width: 44px; padding: 4px !important; }
 .row-avatar {
     width: 32px; height: 32px;
     border-radius: 50%;
