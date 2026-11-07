@@ -111,6 +111,8 @@ def write_log(msg, level='info'):
     if _logger is None:
         print(f"[{level.upper()}] {msg}")
         return
+    if level == 'warn':
+        level = 'warning'
     fn = getattr(_logger, level, _logger.info)
     fn(msg)
 
@@ -119,19 +121,27 @@ def write_log(msg, level='info'):
 # Language / 语言
 # ============================================================
 def detect_system_language() -> str:
+    lang = None
     try:
-        loc = locale.getdefaultlocale()[0] or 'en'
+        lang = locale.getlocale()[0]
     except Exception:
-        return 'en'
-    return 'zh-CN' if loc.lower().startswith('zh') else 'en'
-
+        lang = None
+    if not lang:
+        try:
+            lang = locale.getdefaultlocale()[0]
+        except Exception:
+            lang = None
+    if not lang:
+        lang = os.environ.get('LANG') or os.environ.get('LC_ALL') or 'en'
+    return 'zh-CN' if (lang or 'en').lower().startswith('zh') else 'en'
 
 def peek_language() -> str:
-    """Read language from config before logging is ready."""
     try:
         if CONFIG_FILE.exists():
             with open(CONFIG_FILE, 'rb') as f:
-                lang = tomllib.load(f).get('preferences', {}).get('language', 'auto')
+                cfg = tomllib.load(f)
+                lang = (cfg.get('preferences', {}).get('language')
+                        or cfg.get('language', 'auto'))
                 if lang in ('zh-CN', 'en'):
                     return lang
         elif LEGACY_CONFIG_FILE.exists():
@@ -139,6 +149,8 @@ def peek_language() -> str:
                 raw = json.load(f)
                 lang = (raw.get('preferences', {}).get('language')
                         or raw.get('language', 'auto'))
+                if lang in ('zh-CN', 'en'):
+                    return lang
     except Exception:
         pass
     return detect_system_language()
@@ -268,6 +280,7 @@ class ConfigManager:
             try:
                 with open(LEGACY_CONFIG_FILE, 'r', encoding='utf-8') as f:
                     old = json.load(f)
+                old = self._migrate_old(old)
                 merged = self._merge_defaults(old)
                 for k in ('exiftool_path', 'username', 'password',
                           'api_language', 'refresh_token'):
@@ -288,7 +301,7 @@ class ConfigManager:
     def _merge_defaults(self, cfg: dict) -> dict:
         result = self._default_copy()
         for k, v in cfg.items():
-            if k in ('performance', 'api') and isinstance(v, dict):
+            if isinstance(v, dict) and isinstance(result.get(k), dict):
                 for sk, sv in v.items():
                     result[k][sk] = sv
             elif k in result:
@@ -297,7 +310,10 @@ class ConfigManager:
     def _default_for(self, path):
         node = self.DEFAULT_CONFIG
         for k in path.split('.'):
-            node = node.get(k, {})
+            if isinstance(node, dict):
+                node = node.get(k, {})
+            else:
+                return None
         return node
     def _validate(self, cfg: dict):
         errors = []
@@ -307,7 +323,7 @@ class ConfigManager:
             keys = path.split('.')
             node = result
             for k in keys[:-1]:
-                node = node.get(k, {})
+                node = node.setdefault(k, {})
             leaf = keys[-1]
             if leaf not in node:
                 continue
@@ -326,11 +342,9 @@ class ConfigManager:
                     raise ValueError(f'out of range [{lo}, {hi}]')
                 node[leaf] = v
             except (ValueError, TypeError) as e:
-                dnode = self.DEFAULT_CONFIG
-                for k in keys[:-1]:
-                    dnode = dnode.get(k, {})
-                errors.append((path, node.get(leaf), dnode.get(leaf), str(e)))
-                node[leaf] = dnode.get(leaf)
+                errors.append((path, node.get(leaf),
+                           self._default_for(path), str(e)))
+                node[leaf] = self._default_for(path)
 
         for path in self.STRING_FIELDS:
             keys = path.split('.')
@@ -343,34 +357,27 @@ class ConfigManager:
                                self._default_for(path), 'not a string'))
                 node[leaf] = self._default_for(path)
 
+        prefs = result.setdefault('preferences', {})
+        if prefs.get('language') not in ('auto', 'zh-CN', 'en'):
+            prefs['language'] = 'auto'
+        if prefs.get('theme') not in ('dark', 'light'):
+            prefs['theme'] = 'dark'
 
-        if result.get('language') not in ('auto', 'zh-CN', 'en'):
-            result['language'] = 'auto'
-        if result.get('theme') not in ('dark', 'light'):
-            result['theme'] = 'dark'
-        if result.get('ugoira_format') not in ('gif', 'apng', 'webp'):
-            result['ugoira_format'] = 'gif'
-        if result['performance'].get('download_mode') not in ('normal', 'high'):
-            result['performance']['download_mode'] = 'normal'
+        dl = result.setdefault('download', {})
+        if dl.get('mode') not in ('normal', 'high'):
+            dl['mode'] = 'normal'
+        if dl.get('ugoira_format') not in ('gif', 'apng', 'webp'):
+            dl['ugoira_format'] = 'gif'
 
         api = result.setdefault('api', {})
         mode = str(api.get('web_ajax_mode', 'auto')).strip().lower()
         if mode not in ('auto', 'disabled'):
             errors.append(('api.web_ajax_mode', mode, 'auto',
-                           'invalid choice, resetting to auto'))
+                       'invalid choice, resetting to auto'))
             mode = 'auto'
-        if result['download'].get('mode') not in ('normal', 'high'):
-            result['download']['mode'] = 'normal'
-        if result['download'].get('ugoira_format') not in ('gif', 'apng', 'webp'):
-            result['download']['ugoira_format'] = 'gif'
-        if result['preferences'].get('theme') not in ('dark', 'light'):
-            result['preferences']['theme'] = 'dark'
-        if result['preferences'].get('language') not in ('auto', 'zh-CN', 'en'):
-            result['preferences']['language'] = 'auto'
         api['web_ajax_mode'] = mode
 
         return result, errors
-
     def _resolve_auto_workers(self):
         pw = self.config['download'].get('parallel_workers', 0)
         if pw == 0:
@@ -1687,7 +1694,10 @@ class DownloadWorker:
         self.api = PixivAPI(config, self.rate_limiter, accounts=accounts)
         self.exiftool = ExifToolWrapper(
             str(get_resource_path("plugins/ExifTool.exe")))
-        self.download_dir = Path(config.get('download_dir'))
+        self.download_dir = Path(
+            config.get('download.dir')
+            or str(Path.home() / "Pictures" / "Pixiv")
+        )
         self.download_dir.mkdir(parents=True, exist_ok=True)
         self.url_queue = queue.Queue()
         self.workers = []
