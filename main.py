@@ -203,48 +203,66 @@ class ConfigManager:
                  'preferences.language', 'preferences.theme',
                  'download.ugoira_format')
 
+    LEGACY_TOP_KEYS = (
+    'download_dir', 'proxy', 'language', 'theme', 'ugoira_format',
+    'performance', 'refresh_token', 'exiftool_path',
+    'username', 'password', 'api_language',
+)
+
     def _migrate_old(self, cfg: dict) -> dict:
-        """Convert flat/old config to nested new structure."""
-        marker_old = ('download_dir' in cfg or 'performance' in cfg
-                      or 'ugoira_format' in cfg)
-        if not marker_old:
-            return cfg   # already new structure
+        has_legacy = any(k in cfg for k in self.LEGACY_TOP_KEYS)
+        if not has_legacy:
+            return cfg                      # clean, return as-is
 
         new = self._default_copy()
 
-        if 'download_dir' in cfg:
-            new['download']['dir'] = cfg['download_dir']
-        if 'proxy' in cfg:
-            new['network']['proxy'] = cfg['proxy']
-        if 'language' in cfg:
-            new['preferences']['language'] = cfg['language']
-        if 'theme' in cfg:
-            new['preferences']['theme'] = cfg['theme']
-        if 'ugoira_format' in cfg:
-            new['download']['ugoira_format'] = cfg['ugoira_format']
+        for section in ('download', 'api', 'preferences', 'network'):
+            if section in cfg and isinstance(cfg[section], dict):
+                new[section].update(cfg[section])
+
+        dl = new['download']
+        api_new = new['api']
+        pref = new['preferences']
+        net = new['network']
+
+        old_dl = cfg.get('download') if isinstance(cfg.get('download'), dict) else {}
+        old_pref = cfg.get('preferences') if isinstance(cfg.get('preferences'), dict) else {}
+        old_net = cfg.get('network') if isinstance(cfg.get('network'), dict) else {}
+
+        if cfg.get('download_dir') and 'dir' not in old_dl:
+            dl['dir'] = cfg['download_dir']
+        if cfg.get('proxy') and 'proxy' not in old_net:
+            net['proxy'] = cfg['proxy']
+        if cfg.get('language') and 'language' not in old_pref:
+            pref['language'] = cfg['language']
+        if cfg.get('theme') and 'theme' not in old_pref:
+            pref['theme'] = cfg['theme']
+        if cfg.get('ugoira_format') and 'ugoira_format' not in old_dl:
+            dl['ugoira_format'] = cfg['ugoira_format']
 
         perf = cfg.get('performance') or {}
-        if 'download_mode' in perf:
-            new['download']['mode'] = perf['download_mode']
-        if 'parallel_workers' in perf:
-            new['download']['parallel_workers'] = perf['parallel_workers']
-        if 'download_delay' in perf:
-            new['download']['delay'] = perf['download_delay']
-        if 'max_retries' in perf:
-            new['download']['max_retries'] = perf['max_retries']
-        if 'enable_download_metadata_cache' in perf:
-            new['download']['metadata_cache'] = \
-                perf['enable_download_metadata_cache']
+        if isinstance(perf, dict):
+            if 'download_mode' in perf and 'mode' not in old_dl:
+                dl['mode'] = perf['download_mode']
+            if 'parallel_workers' in perf and 'parallel_workers' not in old_dl:
+                dl['parallel_workers'] = perf['parallel_workers']
+            if 'download_delay' in perf and 'delay' not in old_dl:
+                dl['delay'] = perf['download_delay']
+            if 'max_retries' in perf and 'max_retries' not in old_dl:
+                dl['max_retries'] = perf['max_retries']
+            if 'enable_download_metadata_cache' in perf \
+                    and 'metadata_cache' not in old_dl:
+                dl['metadata_cache'] = perf['enable_download_metadata_cache']
 
-        api = cfg.get('api') or {}
-        for k in ('request_delay', 'rate_limit_wait', 'max_results',
-                  'parallel_requests', 'web_ajax_mode'):
-            if k in api:
-                new['api'][k] = api[k]
+        old_api = cfg.get('api') or {}
+        if isinstance(old_api, dict):
+            for k, v in old_api.items():
+                if k not in api_new:
+                    api_new[k] = v
 
-        write_log("Config migrated to new nested structure", 'info')
+        write_log("Config migrated and legacy keys cleaned", 'info')
         return new
-    
+
     def __init__(self):
         self.config = self._load_or_init()
         self._resolve_auto_workers()
@@ -257,16 +275,16 @@ class ConfigManager:
         if CONFIG_FILE.exists():
             try:
                 with open(CONFIG_FILE, 'rb') as f:
-                    cfg = tomllib.load(f)
+                    original_cfg = tomllib.load(f)
                 write_log(t('config_loaded', path=str(CONFIG_FILE)), 'info')
-                cfg = self._migrate_old(cfg)
+                cfg = self._migrate_old(dict(original_cfg))
                 merged = self._merge_defaults(cfg)
                 validated, errors = self._validate(merged)
-                for path, val, default, err in errors:
-                    write_log(t('config_invalid', key=path, value=val,
+                for key, val, default, err in errors:
+                    write_log(t('config_invalid', key=key, value=val,
                                 default=default, error=err), 'warn')
                 self.config = validated
-                if errors:
+                if errors or validated != original_cfg:
                     self.save()
                 write_log(t('config_validated'), 'info')
                 return self.config
@@ -801,7 +819,7 @@ def format_date(s):
 # Latency / 延迟探测
 # ============================================================
 def measure_latency_sync(config):
-    proxy = config.get('proxy') or None
+    proxy = config.get('network.proxy') or None
     proxies = {'http': proxy, 'https': proxy} if proxy else None
     url = "https://www.cloudflare.com/cdn-cgi/trace"
     try:
@@ -1002,7 +1020,7 @@ class PixivAPI:
     def login(self):
         if self.api is None:
             self.api = AppPixivAPI()
-            proxy = self.config.get('proxy')
+            proxy = self.config.get('network.proxy')
             if proxy:
                 self.api.set_proxy(proxy)
 
@@ -1032,7 +1050,7 @@ class PixivAPI:
 
     # ---------- Retry wrapper ----------
     def _call_with_retry(self, func, *args, **kwargs):
-        max_retries = int(self.config.get('performance.max_retries', 3))
+        max_retries = int(self.config.get('download.max_retries', 3))
         delay = float(self.config.get('api.rate_limit_wait', 150))
         for attempt in range(max_retries + 1):
             self.rate_limiter.wait_if_limited()
@@ -1726,11 +1744,11 @@ class DownloadWorker:
             self.status_callback(msg, level)
 
     def _current_workers(self) -> int:
-        mode = self.config.get('performance.download_mode', 'normal')
+        mode = self.config.get('download.mode', 'normal')
         if mode == 'normal':
             return 1
         return max(1, int(
-            self.config.get('performance._resolved_workers', 3)))
+            self.config.get('download._resolved_workers', 3)))
 
     # ---------- Item status tracking ----------
     def _update_item_status(self, pid, **fields):
@@ -1906,7 +1924,7 @@ class DownloadWorker:
             self.processed_count += 1
             self._save_queue()
             time.sleep(float(
-                self.config.get('performance.download_delay', 0.5)))
+                self.config.get('download.delay', 0.5)))
             self.url_queue.task_done()
 
         with self._threads_lock:
@@ -1970,8 +1988,7 @@ class DownloadWorker:
 
     # ---------- Detail fetching ----------
     def _fetch_illust_detail(self, iid: int, cached_meta=None) -> dict:
-        use_cache = self.config.get(
-            'performance.enable_download_metadata_cache', True)
+        use_cache = self.config.get('download.metadata_cache', True)
 
         if use_cache and cached_meta and cached_meta.get('illust'):
             cached = cached_meta['illust']
@@ -2224,7 +2241,7 @@ class DownloadWorker:
                                      error='ugoira_meta_empty')
             return False, iid, None, metadata
 
-        fmt = str(self.config.get('ugoira_format', 'gif')).lower()
+        fmt = str(self.config.get('download.ugoira_format', 'gif')).lower()
         if fmt not in ('gif', 'apng', 'webp'):
             fmt = 'gif'
         ext_map = {'gif': '.gif', 'apng': '.png', 'webp': '.webp'}
@@ -2531,7 +2548,7 @@ class WebBridge:
             'processed': self.worker.processed_count,
             'running': self.worker.is_running,
             'stopping': self.worker.should_stop and self.worker.is_running,
-            'mode': self.config.get('performance.download_mode', 'normal'),
+            'mode': self.config.get('download.mode', 'normal'),
             'workers': self.worker._current_workers(),
             'retry_pass': self.worker._retry_pass,
             'max_retry': self.worker._max_retry_passes,
@@ -2744,7 +2761,6 @@ async def handle_command(bridge, cmd, ws):
                 'type': 'login_result', 'success': False,
                 'msg': 'Refresh token is required'}))
             return
-        bridge.config.set('refresh_token', rt)
         loop = asyncio.get_event_loop()
 
         def do_login():
@@ -2761,7 +2777,7 @@ async def handle_command(bridge, cmd, ws):
     elif c == 'set_language':
         lang = cmd.get('lang', '')
         if lang in ('zh-CN', 'en'):
-            bridge.config.set('language', lang)
+            bridge.config.set('preferences.language', lang)
             set_language(lang)
             write_log(t('language_loaded', lang=lang), 'info')
             await ws.send_str(json.dumps(
@@ -2770,12 +2786,12 @@ async def handle_command(bridge, cmd, ws):
     elif c == 'set_theme':
         theme = cmd.get('theme', 'dark')
         if theme in ('dark', 'light'):
-            bridge.config.set('theme', theme)
+            bridge.config.set('preferences.theme', theme)
             await ws.send_str(json.dumps(
                 {'type': 'theme_set', 'theme': theme}))
 
     elif c == 'save_ui_state':
-        bridge.session.set_ui_state(cmd.get('state', {}))
+        bridge.session.update_ui_state(cmd.get('state', {}))
         await ws.send_str(json.dumps({'type': 'ui_state_saved'}))
     
     elif c == 'get_ui_state':
@@ -3743,7 +3759,7 @@ async def handle_command(bridge, cmd, ws):
 
         def do_validate():
             test = AppPixivAPI()
-            proxy = bridge.config.get('proxy')
+            proxy = bridge.config.get('network.proxy')
             if proxy:
                 test.set_proxy(proxy)
             try:
@@ -3937,7 +3953,7 @@ async def handle_command(bridge, cmd, ws):
         mode = cmd.get('mode', 'normal')
         if mode not in ('normal', 'high'):
             mode = 'normal'
-        bridge.config.set('performance.download_mode', mode)
+        bridge.config.set('download.mode', mode)
         await ws.send_str(json.dumps(bridge._queue_status_payload()))
 
     elif c == 'test_latency':
@@ -3967,6 +3983,59 @@ async def index_handler(request):
         return web.FileResponse(html_path)
     return web.Response(text="index.html not found", status=404)
 
+# ============================================================
+# HTTP client (proxy image) / 图像转发客户端
+# ============================================================
+_http_session: Optional[aiohttp.ClientSession] = None
+
+PROXY_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/121.0.0.0 Safari/537.36")
+
+
+async def get_http_session() -> aiohttp.ClientSession:
+    """Lazy-init shared session bound to the running loop."""
+    global _http_session
+    if _http_session is None or _http_session.closed:
+        connector = aiohttp.TCPConnector(
+            limit=32,
+            limit_per_host=16,
+            ttl_dns_cache=300,
+            enable_cleanup_closed=True,
+        )
+        _http_session = aiohttp.ClientSession(
+            connector=connector,
+            timeout=aiohttp.ClientTimeout(
+                total=60, sock_connect=10, sock_read=30),
+            headers={
+                'User-Agent': PROXY_UA,
+                'Referer': 'https://www.pixiv.net/',
+            },
+        )
+    return _http_session
+
+
+async def close_http_session(app=None):
+    global _http_session
+    if _http_session is not None and not _http_session.closed:
+        await _http_session.close()
+    _http_session = None
+
+def _build_proxy_headers(upstream_headers) -> dict:
+    """Forward content headers + cache headers from upstream."""
+    out = {}
+    for k in ('Content-Type', 'Content-Length',
+              'ETag', 'Last-Modified'):
+        v = upstream_headers.get(k)
+        if v:
+            out[k] = v
+    cc = upstream_headers.get('Cache-Control')
+    if not cc:
+        # Pixiv CDN 的图片 URL 带内容哈希，不会变，immutable 安全
+        cc = 'public, max-age=604800, immutable'
+    out['Cache-Control'] = cc
+    return out
+
 
 async def proxy_image_handler(request):
     url = request.query.get('url', '')
@@ -3974,26 +4043,46 @@ async def proxy_image_handler(request):
         return web.Response(status=400, text='missing url')
     if 'pximg.net' not in url:
         return web.Response(status=403, text='forbidden host')
-    headers = {
-        'User-Agent': ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                       "AppleWebKit/537.36 (KHTML, like Gecko) "
-                       "Chrome/121.0.0.0 Safari/537.36"),
-        'Referer': 'https://www.pixiv.net/',
-    }
-    loop = asyncio.get_event_loop()
 
-    def fetch():
-        try:
-            r = requests.get(url, headers=headers, timeout=15, stream=True)
-            if r.status_code != 200:
-                return r.status_code, b'', 'text/plain'
-            return 200, r.content, r.headers.get('Content-Type', 'image/jpeg')
-        except Exception as e:
-            write_log(t('proxy_failed', error=str(e)), 'warn')
-            return 502, str(e).encode(), 'text/plain'
+    session = await get_http_session()
 
-    status, body, ctype = await loop.run_in_executor(None, fetch)
-    return web.Response(body=body, status=status, content_type=ctype)
+    try:
+        async with session.get(url) as upstream:
+            if upstream.status != 200:
+                write_log(
+                    f"proxy: upstream HTTP {upstream.status} for {url[:80]}",
+                    'warn')
+                return web.Response(
+                    status=upstream.status,
+                    text=f'upstream {upstream.status}')
+
+            resp = web.StreamResponse(
+                status=200,
+                headers=_build_proxy_headers(upstream.headers),
+            )
+            await resp.prepare(request)
+
+            try:
+                async for chunk in upstream.content.iter_chunked(64 * 1024):
+                    if chunk:
+                        await resp.write(chunk)
+                await resp.write_eof()
+            except (ConnectionResetError, asyncio.CancelledError):
+                write_log("proxy: client disconnected mid-stream", 'debug')
+            except Exception as e:
+                write_log(f"proxy: stream error {e}", 'warn')
+
+            return resp
+
+    except asyncio.TimeoutError:
+        write_log(f"proxy: timeout {url[:80]}", 'warn')
+        return web.Response(status=504, text='upstream timeout')
+    except aiohttp.ClientError as e:
+        write_log(f"proxy: client error {e}", 'warn')
+        return web.Response(status=502, text=str(e))
+    except Exception as e:
+        write_log(t('proxy_failed', error=str(e)), 'warn')
+        return web.Response(status=502, text=str(e))
 
 
 async def ws_handler(request):
@@ -4121,13 +4210,14 @@ async def main_async(port, config, accounts, session):
         except Exception as e:
             write_log(t('queue_save_failed', error=str(e)), 'error')
     app.on_shutdown.append(on_shutdown)
+    app.on_cleanup.append(close_http_session)
 
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '127.0.0.1', port)
     await site.start()
 
-    url = f"http://127.0.0.1:{port}/"
+    url = f"http://localhost:{port}/"
     write_log(t('server_started', url=url), 'info')
 
     def open_browser_and_minimize():
