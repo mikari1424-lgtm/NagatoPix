@@ -1303,9 +1303,10 @@ document.querySelectorAll("nav button").forEach((btn) => {
 function onRouteSearch(params) {
     const tag = params.tag || "";
     if (!tag) return;
-
+    const mode = params.mode || "illust";
+    setEl("search-mode", (el) => (el.value = mode));
+    onSearchModeChange();
     setEl("search-tag", (el) => (el.value = tag));
-    if (params.mode) setEl("search-mode", (el) => (el.value = params.mode));
     if (params.target)
         setEl("search-target", (el) => (el.value = params.target));
     if (params.sort) setEl("search-sort", (el) => (el.value = params.sort));
@@ -1319,15 +1320,16 @@ function onRouteSearch(params) {
         params.page,
         params.pages,
     );
-
-    // 数据已匹配当前 URL → 只渲染，不再请求
     if (searchDataKey === wantKey) {
         renderSearchHeaderCard();
-        switchSearchPane(searchActivePane || "illust");
+        setEl("search-result-pane-illust", (el) =>
+            el.classList.toggle("active", mode !== "novel"),
+        );
+        setEl("search-result-pane-novel", (el) =>
+            el.classList.toggle("active", mode === "novel"),
+        );
         return;
     }
-
-    // 数据不匹配 → 请求
     doSearch();
 }
 
@@ -1356,6 +1358,7 @@ function doSearch() {
     const tag = (tagInput?.value || "").trim();
     if (!tag) return toast(t("toast_need_tag"), "error");
 
+    const mode = document.getElementById("search-mode")?.value || "illust";
     const sort = document.getElementById("search-sort")?.value || "date_desc";
     const target =
         document.getElementById("search-target")?.value ||
@@ -1365,17 +1368,26 @@ function doSearch() {
         parseInt(document.getElementById("search-page")?.value) || 1;
     const pages = parseInt(document.getElementById("search-pages")?.value) || 1;
 
-    const fIllust =
-        document.getElementById("search-type-illust")?.checked ?? true;
-    const fManga =
-        document.getElementById("search-type-manga")?.checked ?? true;
-    const fUgoira =
-        document.getElementById("search-type-ugoira")?.checked ?? false;
-    const fNovel =
-        document.getElementById("search-type-novel")?.checked ?? false;
-
-    if (!fIllust && !fManga && !fUgoira && !fNovel)
-        return toast(t("toast_need_type"), "error");
+    // filters by mode
+    let filters;
+    if (mode === "novel") {
+        filters = { illust: false, manga: false, ugoira: false, novel: true };
+    } else {
+        const fIllust =
+            document.getElementById("search-type-illust")?.checked ?? true;
+        const fManga =
+            document.getElementById("search-type-manga")?.checked ?? true;
+        const fUgoira =
+            document.getElementById("search-type-ugoira")?.checked ?? false;
+        if (!fIllust && !fManga && !fUgoira)
+            return toast(t("toast_need_type"), "error");
+        filters = {
+            illust: fIllust,
+            manga: fManga,
+            ugoira: fUgoira,
+            novel: false,
+        };
+    }
 
     let duration, start_date, end_date;
     if (durationRaw === "custom") {
@@ -1388,17 +1400,25 @@ function doSearch() {
         duration = durationRaw;
     }
 
-    // 记录本次数据来源 key，onRouteSearch 用它判断「是否需要重新请求」
     searchDataKey = computeSearchKey(tag, target, sort, startPage, pages);
 
-    // 加载态
+    const activePane = mode === "novel" ? "novel" : "illust";
+    setEl("search-result-pane-illust", (el) =>
+        el.classList.toggle("active", activePane === "illust"),
+    );
+    setEl("search-result-pane-novel", (el) =>
+        el.classList.toggle("active", activePane === "novel"),
+    );
+
     setEl(
-        "search-list-illust",
+        activePane === "novel" ? "search-list-novel" : "search-list-illust",
         (el) =>
             (el.innerHTML = `<div class="loading"><div class="spinner"></div>${t("loading_search")}</div>`),
     );
-    setEl("search-list-novel", (el) => (el.innerHTML = ""));
-    setEl("search-pane-tabs", (el) => (el.style.display = "none"));
+    setEl(
+        "search-list-" + (activePane === "novel" ? "illust" : "novel"),
+        (el) => (el.innerHTML = ""),
+    );
     setEl("search-header-card", (el) => (el.style.display = "none"));
 
     send({
@@ -1411,17 +1431,12 @@ function doSearch() {
         end_date: end_date || "",
         start_page: startPage,
         pages,
-        filters: {
-            illust: fIllust,
-            manga: fManga,
-            ugoira: fUgoira,
-            novel: fNovel,
-        },
+        filters,
     });
 
     setRoute("search", {
         tag,
-        mode: "illust",
+        mode,
         target,
         sort,
         page: startPage,
@@ -1692,19 +1707,31 @@ function doSearchFromTopbar() {
 
 function onSearchModeChange() {
     const mode = document.getElementById("search-mode").value;
+    const isUser = mode === "user";
     setEl(
         "search-settings-illust",
-        (el) => (el.style.display = mode === "illust" ? "" : "none"),
+        (el) => (el.style.display = isUser ? "none" : ""),
     );
     setEl(
         "search-settings-user",
-        (el) => (el.style.display = mode === "user" ? "" : "none"),
+        (el) => (el.style.display = isUser ? "" : "none"),
     );
-    if (mode !== "illust") {
-        setEl("search-header-card", (el) => (el.style.display = "none"));
-    } else if (searchCurrentTag) {
-        setEl("search-header-card", (el) => (el.style.display = ""));
-    }
+    // 小说模式隐藏插画专属：作品类型/收藏数
+    const isNovel = mode === "novel";
+    setEl(
+        "search-type-row",
+        (el) => (el.style.display = isNovel ? "none" : ""),
+    );
+    setEl(
+        "search-bookmark-row",
+        (el) => (el.style.display = isNovel ? "none" : ""),
+    );
+    setEl(
+        "search-header-card",
+        (el) =>
+            (el.style.display =
+                mode === "user" || !searchCurrentTag ? "none" : ""),
+    );
 }
 
 function openSearchSettings() {
@@ -2621,6 +2648,22 @@ function illustViewerPageNext() {
     }
 }
 
+function sanitizeCaption(raw) {
+    if (!raw) return "";
+    if (!/<[a-zA-Z\/][^>]*>/.test(raw)) return raw;
+    try {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(raw, "text/html");
+        doc.querySelectorAll("br").forEach((br) => br.replaceWith("\n"));
+        doc.querySelectorAll("p, div, li, h1, h2, h3, h4, h5, h6").forEach(
+            (el) => el.insertAdjacentText("afterend", "\n"),
+        );
+        return (doc.body.textContent || "").replace(/\n{3,}/g, "\n\n").trim();
+    } catch (e) {
+        return raw;
+    }
+}
+
 function renderIllustViewer() {
     const it = ivState.items[ivState.idx];
     if (!it) return;
@@ -2675,7 +2718,7 @@ function renderIllustViewer() {
     setEl("iv-tags", (el) => (el.innerHTML = tagsHtml));
 
     const captionParts = slim.caption_parts;
-    const caption = slim.caption || "";
+    const caption = sanitizeCaption(it.caption || slim.caption || "");
     setEl("iv-caption-text", (el) => {
         if (Array.isArray(captionParts) && captionParts.length) {
             el.innerHTML = renderCommentParts(captionParts);
@@ -3096,7 +3139,7 @@ function onPresetChange() {
 function onUgoiraFormatChange() {
     const v = document.getElementById("dl-ugoira-format")?.value;
     if (!v) return;
-    send({ cmd: "save_config", data: { ugoira_format: v } });
+    send({ cmd: "save_config", data: { "download.ugoira_format": v } });
 }
 
 function onThreadsChange() {
@@ -3105,7 +3148,7 @@ function onThreadsChange() {
         Math.min(8, parseInt(document.getElementById("dl-threads").value) || 1),
     );
     document.getElementById("dl-threads").value = v;
-    send({ cmd: "save_config", data: { "performance.parallel_workers": v } });
+    send({ cmd: "save_config", data: { "download.parallel_workers": v } });
 }
 
 function stopQueue() {
@@ -3433,20 +3476,22 @@ function submitAddAccount() {
 
 // ============ Config ============
 const CONFIG_KEYS = [
-    "download_dir",
-    "proxy",
-    "language",
-    "theme",
-    "performance.download_mode",
-    "performance.parallel_workers",
-    "performance.download_delay",
-    "performance.max_retries",
-    "performance.enable_download_metadata_cache",
+    "download.dir",
+    "download.mode",
+    "download.parallel_workers",
+    "download.delay",
+    "download.max_retries",
+    "download.metadata_cache",
+    "download.overwrite_existing",
+    "download.ugoira_format",
     "api.request_delay",
-    "api.rate_limit_wait",
-    "api.max_results",
     "api.parallel_requests",
+    "api.max_results",
     "api.web_ajax_mode",
+    "preferences.language",
+    "preferences.theme",
+    "network.proxy",
+    "network.port_start",
 ];
 
 let configSaveTimer = null;
@@ -3467,20 +3512,25 @@ function fillConfig(cfg) {
         else el.value = val;
     });
 
+    const prefLang = getDotted(cfg, "preferences.language");
     if (
-        cfg.language &&
-        (cfg.language === "zh-CN" || cfg.language === "en") &&
-        cfg.language !== currentLang
+        prefLang &&
+        (prefLang === "zh-CN" || prefLang === "en") &&
+        prefLang !== currentLang
     ) {
-        currentLang = cfg.language;
+        currentLang = prefLang;
         localStorage.setItem("nagato_lang", currentLang);
         applyI18n();
         renderTokenHelp();
     }
-    if (cfg.ugoira_format) {
-        setEl("dl-ugoira-format", (el) => (el.value = cfg.ugoira_format));
+    const prefTheme = getDotted(cfg, "preferences.theme");
+    if (prefTheme) applyTheme(prefTheme);
+
+    // 下载 tab 里的动图格式也要同步
+    const ugoiraFmt = getDotted(cfg, "download.ugoira_format");
+    if (ugoiraFmt) {
+        setEl("dl-ugoira-format", (el) => (el.value = ugoiraFmt));
     }
-    if (cfg.theme) applyTheme(cfg.theme);
 }
 
 function scheduleConfigSave() {
@@ -3501,8 +3551,9 @@ function saveConfig(silent = false) {
     });
     send({ cmd: "save_config", data });
 
-    if (data.language === "zh-CN" || data.language === "en") {
-        switchLanguage(data.language);
+    const lang = getDotted(data, "preferences.language");
+    if (lang === "zh-CN" || lang === "en") {
+        switchLanguage(lang);
     }
     if (!silent) toast(t("toast_config_saved"), "success");
 }

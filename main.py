@@ -131,14 +131,14 @@ def peek_language() -> str:
     try:
         if CONFIG_FILE.exists():
             with open(CONFIG_FILE, 'rb') as f:
-                lang = tomllib.load(f).get('language', 'auto')
+                lang = tomllib.load(f).get('preferences', {}).get('language', 'auto')
                 if lang in ('zh-CN', 'en'):
                     return lang
         elif LEGACY_CONFIG_FILE.exists():
             with open(LEGACY_CONFIG_FILE, 'r', encoding='utf-8') as f:
-                lang = json.load(f).get('language', 'auto')
-                if lang in ('zh-CN', 'en'):
-                    return lang
+                raw = json.load(f)
+                lang = (raw.get('preferences', {}).get('language')
+                        or raw.get('language', 'auto'))
     except Exception:
         pass
     return detect_system_language()
@@ -149,39 +149,90 @@ def peek_language() -> str:
 # ============================================================
 class ConfigManager:
     DEFAULT_CONFIG = {
-        'download_dir': str(Path.home() / "Pictures" / "Pixiv"),
-        'proxy': '',
-        'language': 'auto',         # auto | zh-CN | en
-        'theme': 'dark',            # dark | light
+    'download': {
+        'dir': str(Path.home() / "Pictures" / "Pixiv"),
+        'mode': 'normal',
+        'parallel_workers': 0,
+        'delay': 0.5,
+        'max_retries': 3,
+        'metadata_cache': True,
+        'overwrite_existing': False,
         'ugoira_format': 'gif',
-        'performance': {
-            'download_mode': 'normal',          # normal | high
-            'parallel_workers': 0,              # 0 = auto
-            'download_delay': 0.5,
-            'max_retries': 3,
-            'enable_download_metadata_cache': True,
-        },
-        'api': {
-            'request_delay': 0.3,
-            'rate_limit_wait': 150.0,
-            'max_results': 30,
-            'parallel_requests': 1,
-            'web_ajax_mode': 'auto',            # auto | disabled
-        },
+    },
+    'api': {
+        'parallel_requests': 1,
+        'request_delay': 0.3,
+        'rate_limit_wait': 150.0,
+        'max_results': 30,
+        'web_ajax_mode': 'auto',
+    },
+    'preferences': {
+        'theme': 'dark',
+        'language': 'auto',
+    },
+    'network': {
+        'proxy': '',
+        'port_start': 8765,
+    },
     }
 
     VALIDATORS = {
-        'performance.download_delay':   ('float', 0.0, 60.0),
-        'performance.parallel_workers': ('int',   0,   64),
-        'performance.max_retries':      ('int',   1,   100),
-        'api.request_delay':            ('float', 0.0, 60.0),
-        'api.rate_limit_wait':          ('float', 1.0, 3600.0),
-        'api.max_results':              ('int',   1,   500),
-        'api.parallel_requests':        ('int',   1,   8),
+    'download.parallel_workers': ('int', 0, 64),
+    'download.delay': ('float', 0.0, 60.0),
+    'download.max_retries': ('int', 1, 100),
+    'api.parallel_requests': ('int', 1, 8),
+    'api.request_delay': ('float', 0.0, 60.0),
+    'api.rate_limit_wait': ('float', 1.0, 3600.0),
+    'api.max_results': ('int', 1, 500),
+    'network.port_start': ('int', 1024, 65535),
     }
 
-    STRING_FIELDS = ('download_dir', 'proxy', 'language', 'theme', 'ugoira_format')
+    STRING_FIELDS = ('download.dir', 'network.proxy',
+                 'preferences.language', 'preferences.theme',
+                 'download.ugoira_format')
 
+    def _migrate_old(self, cfg: dict) -> dict:
+        """Convert flat/old config to nested new structure."""
+        marker_old = ('download_dir' in cfg or 'performance' in cfg
+                      or 'ugoira_format' in cfg)
+        if not marker_old:
+            return cfg   # already new structure
+
+        new = self._default_copy()
+
+        if 'download_dir' in cfg:
+            new['download']['dir'] = cfg['download_dir']
+        if 'proxy' in cfg:
+            new['network']['proxy'] = cfg['proxy']
+        if 'language' in cfg:
+            new['preferences']['language'] = cfg['language']
+        if 'theme' in cfg:
+            new['preferences']['theme'] = cfg['theme']
+        if 'ugoira_format' in cfg:
+            new['download']['ugoira_format'] = cfg['ugoira_format']
+
+        perf = cfg.get('performance') or {}
+        if 'download_mode' in perf:
+            new['download']['mode'] = perf['download_mode']
+        if 'parallel_workers' in perf:
+            new['download']['parallel_workers'] = perf['parallel_workers']
+        if 'download_delay' in perf:
+            new['download']['delay'] = perf['download_delay']
+        if 'max_retries' in perf:
+            new['download']['max_retries'] = perf['max_retries']
+        if 'enable_download_metadata_cache' in perf:
+            new['download']['metadata_cache'] = \
+                perf['enable_download_metadata_cache']
+
+        api = cfg.get('api') or {}
+        for k in ('request_delay', 'rate_limit_wait', 'max_results',
+                  'parallel_requests', 'web_ajax_mode'):
+            if k in api:
+                new['api'][k] = api[k]
+
+        write_log("Config migrated to new nested structure", 'info')
+        return new
+    
     def __init__(self):
         self.config = self._load_or_init()
         self._resolve_auto_workers()
@@ -196,6 +247,7 @@ class ConfigManager:
                 with open(CONFIG_FILE, 'rb') as f:
                     cfg = tomllib.load(f)
                 write_log(t('config_loaded', path=str(CONFIG_FILE)), 'info')
+                cfg = self._migrate_old(cfg)
                 merged = self._merge_defaults(cfg)
                 validated, errors = self._validate(merged)
                 for path, val, default, err in errors:
@@ -242,7 +294,11 @@ class ConfigManager:
             elif k in result:
                 result[k] = v
         return result
-
+    def _default_for(self, path):
+        node = self.DEFAULT_CONFIG
+        for k in path.split('.'):
+            node = node.get(k, {})
+        return node
     def _validate(self, cfg: dict):
         errors = []
         result = json.loads(json.dumps(cfg))
@@ -276,11 +332,17 @@ class ConfigManager:
                 errors.append((path, node.get(leaf), dnode.get(leaf), str(e)))
                 node[leaf] = dnode.get(leaf)
 
-        for key in self.STRING_FIELDS:
-            if key in result and not isinstance(result[key], str):
-                errors.append((key, result[key],
-                               self.DEFAULT_CONFIG[key], 'not a string'))
-                result[key] = self.DEFAULT_CONFIG[key]
+        for path in self.STRING_FIELDS:
+            keys = path.split('.')
+            node = result
+            for k in keys[:-1]:
+                node = node.setdefault(k, {})
+            leaf = keys[-1]
+            if leaf in node and not isinstance(node[leaf], str):
+                errors.append((path, node[leaf],
+                               self._default_for(path), 'not a string'))
+                node[leaf] = self._default_for(path)
+
 
         if result.get('language') not in ('auto', 'zh-CN', 'en'):
             result['language'] = 'auto'
@@ -297,12 +359,20 @@ class ConfigManager:
             errors.append(('api.web_ajax_mode', mode, 'auto',
                            'invalid choice, resetting to auto'))
             mode = 'auto'
+        if result['download'].get('mode') not in ('normal', 'high'):
+            result['download']['mode'] = 'normal'
+        if result['download'].get('ugoira_format') not in ('gif', 'apng', 'webp'):
+            result['download']['ugoira_format'] = 'gif'
+        if result['preferences'].get('theme') not in ('dark', 'light'):
+            result['preferences']['theme'] = 'dark'
+        if result['preferences'].get('language') not in ('auto', 'zh-CN', 'en'):
+            result['preferences']['language'] = 'auto'
         api['web_ajax_mode'] = mode
 
         return result, errors
 
     def _resolve_auto_workers(self):
-        pw = self.config['performance'].get('parallel_workers', 0)
+        pw = self.config['download'].get('parallel_workers', 0)
         if pw == 0:
             try:
                 import psutil
@@ -310,10 +380,16 @@ class ConfigManager:
                 detected = max(1, min(8, logical // 2))
             except Exception:
                 detected = 3
-            self.config['performance']['_resolved_workers'] = detected
+            self.config['download']['_resolved_workers'] = detected
             write_log(f"Auto worker count: {detected}", 'info')
         else:
-            self.config['performance']['_resolved_workers'] = pw
+            self.config['download']['_resolved_workers'] = pw
+
+    def effective_language(self) -> str:
+        lang = self.config.get('preferences', {}).get('language', 'auto')
+        if lang == 'auto':
+            return detect_system_language()
+        return lang if lang in ('zh-CN', 'en') else 'en'
 
     # ---------- Save ----------
     def save(self):
@@ -2051,7 +2127,7 @@ class DownloadWorker:
                 fname = (f"{iid}{ext}" if page_count == 1
                          else f"{iid}_p{idx+1}{ext}")
             sp = self.download_dir / fname
-            if sp.exists():
+            if sp.exists() and not self.config.get('download.overwrite_existing', False):
                 write_log(t('file_exists', path=str(sp)), 'info')
                 saved.append(sp)
                 self._update_item_status(
@@ -2146,7 +2222,7 @@ class DownloadWorker:
         ugoira_dir.mkdir(parents=True, exist_ok=True)
         out_path = ugoira_dir / f"{iid}_ugoira{ext_map[fmt]}"
 
-        if out_path.exists():
+        if out_path.exists() and not self.config.get('download.overwrite_existing', False):
             write_log(t('file_exists', path=str(out_path)), 'info')
             self._update_item_status(iid, status='success',
                                      stage='done', progress=100)
@@ -2481,6 +2557,19 @@ class WebBridge:
             return_exceptions=True)
 
 
+def _clean_html_text(s):
+    if not s:
+        return ''
+    if '<' not in s:
+        return s
+    text = re.sub(r'<br\s*/?>', '\n', s, flags=re.IGNORECASE)
+    text = re.sub(r'</(p|div|li|h[1-6])>', '\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'<[^>]+>', '', text)
+    for a, b in (('&nbsp;', ' '), ('&amp;', '&'), ('&lt;', '<'),
+                 ('&gt;', '>'), ('&quot;', '"'), ('&#39;', "'")):
+        text = text.replace(a, b)
+    return re.sub(r'\n{3,}', '\n\n', text).strip()
+
 # ============================================================
 # Formatters / 数据格式化
 # ============================================================
@@ -2516,6 +2605,7 @@ def format_item(it):
         'author_id': user.get('id'),
         'author_account': user.get('account', ''),
         'author_avatar': avatar,
+        'caption': _clean_html_text(it.get('caption', '') or ''),
         'views': it.get('total_view', 0) or 0,
         'bookmarks': it.get('total_bookmarks', 0) or 0,
         'likes': it.get('total_likes', 0) or 0,
@@ -2941,46 +3031,93 @@ async def handle_command(bridge, cmd, ws):
             api = make_api(bridge)
             api.ensure_login()
             delay = float(bridge.config.get('api.request_delay', 0.3))
+            parallel = int(bridge.config.get('api.parallel_requests', 1))
+            limit = 480
+            page_count = limit // 30  # 16 pages
 
+            def fetch_rank_page(page, date_):
+                offset = (page - 1) * 30
+                resp = api.get_ranking(mode, date=date_, offset=offset)
+                return resp or {}
+
+            # Main ranking
+            page_range = list(range(1, page_count + 1))
             today = []
             today_ids = set()
             today_date = None
-            offset = 0
-            while len(today) < limit:
-                bridge.broadcast({'type': 'ranking_progress',
-                                  'phase': 'today', 'count': len(today)})
-                try:
-                    resp = api.get_ranking(mode, date=date, offset=offset)
-                except Exception as e:
-                    write_log(t('ranking_failed', error=str(e)), 'error')
-                    break
-                items = resp.get('illusts', []) or []
-                if not items:
-                    break
-                if today_date is None:
-                    nxt = resp.get('next_url')
-                    if nxt:
+            if parallel > 1:
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                pages_data = {}
+                with ThreadPoolExecutor(max_workers=parallel) as ex:
+                    futures = {ex.submit(fetch_rank_page, p, date): p
+                               for p in page_range}
+                    done = 0
+                    for fut in as_completed(futures):
+                        done += 1
+                        p = futures[fut]
+                        bridge.broadcast({'type': 'ranking_progress',
+                                          'phase': 'today',
+                                          'count': done * 30})
                         try:
-                            params = parse_qs(urlparse(nxt).query)
-                            d = params.get('date', [None])[0]
-                            if d:
-                                today_date = d
-                        except Exception:
-                            pass
-                for it in items:
-                    pid = it.get('id')
-                    if pid is not None and pid not in today_ids:
-                        today_ids.add(pid)
-                        today.append(it)
-                offset += 30
-                if len(today) >= limit:
-                    break
-                if not resp.get('next_url'):
-                    break
-                time.sleep(delay)
+                            pages_data[p] = fut.result()
+                        except Exception as e:
+                            write_log(f"ranking page {p} failed: {e}", 'error')
+                            pages_data[p] = {}
+                for p in page_range:
+                    resp = pages_data.get(p) or {}
+                    if today_date is None:
+                        nxt = resp.get('next_url')
+                        if nxt:
+                            try:
+                                params = parse_qs(urlparse(nxt).query)
+                                d = params.get('date', [None])[0]
+                                if d:
+                                    today_date = d
+                            except Exception:
+                                pass
+                    for it in resp.get('illusts', []) or []:
+                        pid = it.get('id')
+                        if pid is not None and pid not in today_ids:
+                            today_ids.add(pid)
+                            today.append(it)
+                    if len(today) >= limit:
+                        break
+            else:
+                offset = 0
+                while len(today) < limit:
+                    bridge.broadcast({'type': 'ranking_progress',
+                                      'phase': 'today',
+                                      'count': len(today)})
+                    try:
+                        resp = api.get_ranking(mode, date=date, offset=offset)
+                    except Exception as e:
+                        write_log(t('ranking_failed', error=str(e)), 'error')
+                        break
+                    items = resp.get('illusts', []) or []
+                    if not items:
+                        break
+                    if today_date is None:
+                        nxt = resp.get('next_url')
+                        if nxt:
+                            try:
+                                params = parse_qs(urlparse(nxt).query)
+                                d = params.get('date', [None])[0]
+                                if d:
+                                    today_date = d
+                            except Exception:
+                                pass
+                    for it in items:
+                        pid = it.get('id')
+                        if pid is not None and pid not in today_ids:
+                            today_ids.add(pid)
+                            today.append(it)
+                    offset += 30
+                    if not resp.get('next_url'):
+                        break
+                    time.sleep(delay)
             today = today[:limit]
 
-            # yesterday
+            # 昨日对比 —— 保持串行，逻辑简单
             if date:
                 try:
                     base_dt = datetime.strptime(date, '%Y-%m-%d')
@@ -3004,8 +3141,7 @@ async def handle_command(bridge, cmd, ws):
                                   'phase': 'yesterday',
                                   'count': len(yesterday_ids)})
                 try:
-                    resp = api.get_ranking(mode, date=prev_date,
-                                           offset=offset)
+                    resp = api.get_ranking(mode, date=prev_date, offset=offset)
                 except Exception as e:
                     write_log(t('ranking_failed', error=str(e)), 'error')
                     break
@@ -3028,7 +3164,6 @@ async def handle_command(bridge, cmd, ws):
                 it['_is_new'] = is_new
                 if is_new:
                     new_count += 1
-
             return today, len(today_ids), len(yesterday_ids), new_count
 
         try:
@@ -3099,6 +3234,9 @@ async def handle_command(bridge, cmd, ws):
             api = make_api(bridge)
             api.ensure_login()
             detail = api.get_user_detail(uid)
+            delay = float(bridge.config.get('api.request_delay', 0.3))
+            parallel = int(bridge.config.get('api.parallel_requests', 1))
+
             if not detail:
                 return None, [], [], None
             bridge.broadcast({'type': 'user_detail_phase',
@@ -3107,50 +3245,81 @@ async def handle_command(bridge, cmd, ws):
 
             delay = float(bridge.config.get('api.request_delay', 0.3))
 
-            # Illusts
-            all_illusts = []
-            offset = 0
-            page = 1
-            while True:
-                bridge.broadcast({'type': 'user_detail_phase',
-                                  'phase': 'illusts',
-                                  'page': page,
-                                  'count': len(all_illusts)})
-                try:
-                    resp = api.get_user_illusts(uid, offset=offset)
-                except Exception as e:
-                    write_log(t('user_illusts_failed', error=str(e)), 'error')
-                    break
-                items = resp.get('illusts', [])
-                if not items:
-                    break
-                all_illusts.extend(items)
-                offset += 30
-                page += 1
-                time.sleep(delay)
+            def fetch_user_illusts(offset_):
+                resp = api.get_user_illusts(uid, offset=offset_)
+                return resp.get('illusts', []) if resp else []
 
-            # Novels
-            all_novels = []
-            offset = 0
-            page = 1
-            while True:
-                bridge.broadcast({'type': 'user_detail_phase',
-                                  'phase': 'novels',
-                                  'page': page,
-                                  'count': len(all_novels)})
-                try:
-                    resp = api._call_with_retry(
-                        api.api.user_novels, uid, offset=offset)
-                except Exception as e:
-                    write_log(f"user_novels failed: {e}", 'warn')
-                    break
-                items = resp.get('novels', []) if resp else []
-                if not items:
-                    break
-                all_novels.extend(items)
-                offset += 30
-                page += 1
-                time.sleep(delay)
+            def fetch_user_novels(offset_):
+                resp = api._call_with_retry(
+                    api.api.user_novels, uid, offset=offset_)
+                return resp.get('novels', []) if resp else []
+
+            def paged_fetch(fetcher, phase, label):
+                out = []
+                if parallel <= 1:
+                    offset_ = 0
+                    page_ = 1
+                    while True:
+                        bridge.broadcast({'type': 'user_detail_phase',
+                                          'phase': phase,
+                                          'page': page_,
+                                          'count': len(out)})
+                        try:
+                            items = fetcher(offset_)
+                        except Exception as e:
+                            write_log(f"{label} failed: {e}", 'error')
+                            break
+                        if not items:
+                            break
+                        out.extend(items)
+                        offset_ += 30
+                        page_ += 1
+                        time.sleep(delay)
+                    return out
+
+                # Parallel: fetch a batch of pages
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                batch = 5
+                offset_ = 0
+                page_ = 1
+                while True:
+                    offsets = [(page_ + i - 1) * 30 for i in range(batch)]
+                    with ThreadPoolExecutor(max_workers=parallel) as ex:
+                        futures = {ex.submit(fetcher, off): (page_ + i)
+                                   for i, off in enumerate(offsets)}
+                        got_empty = False
+                        results = {}
+                        for fut in as_completed(futures):
+                            pg = futures[fut]
+                            try:
+                                results[pg] = fut.result()
+                            except Exception as e:
+                                write_log(f"{label} page {pg} failed: {e}",
+                                          'error')
+                                results[pg] = []
+                        for i in range(batch):
+                            pg = page_ + i
+                            items = results.get(pg, [])
+                            bridge.broadcast({'type': 'user_detail_phase',
+                                              'phase': phase,
+                                              'page': pg,
+                                              'count': len(out) + len(items)})
+                            if not items:
+                                got_empty = True
+                                break
+                            out.extend(items)
+                            if len(items) < 30:
+                                got_empty = True
+                                break
+                        if got_empty:
+                            break
+                    page_ += batch
+                    if page_ > 500:
+                        break
+                return out
+
+            all_illusts = paged_fetch(fetch_user_illusts, 'illusts', 'user_illusts')
+            all_novels = paged_fetch(fetch_user_novels, 'novels', 'user_novels')
 
             is_accept = None
             if all_illusts:
@@ -3855,7 +4024,9 @@ async def ws_handler(request):
 # ============================================================
 # Helpers
 # ============================================================
-def find_free_port(start=8765, end=8865):
+def find_free_port(start=8765, end=None):
+    if end is None:
+        end = start + 100
     for port in range(start, end):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
@@ -3994,7 +4165,7 @@ def main():
     else:
         write_log(t('exiftool_not_found', path=str(exiftool_path)), 'warn')
 
-    port = find_free_port()
+    port = find_free_port(start=int(config.get('network.port_start', 8765)))
     try:
         asyncio.run(main_async(port, config, accounts, session))
     except KeyboardInterrupt:

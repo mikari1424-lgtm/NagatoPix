@@ -401,6 +401,12 @@ const I18N = {
         toast_need_tag_for_encyclopedia: "请先在搜索框输入关键词",
         ranking_date: "日期:",
         ranking_loading_date: "加载日期...",
+        settings_preferences: "偏好",
+        settings_network: "网络",
+        settings_overwrite_existing: "重名文件覆盖保存",
+        settings_port_start: "服务器端口起始:",
+        hint_port_start: "程序在 起始端口 ~ 起始端口+100 范围内寻找空闲端口",
+        search_mode_novel: "小说",
     },
     en: {
         connecting: "Connecting...",
@@ -803,6 +809,12 @@ const I18N = {
         toast_need_tag_for_encyclopedia: "Please enter a keyword first",
         ranking_date: "Date:",
         ranking_loading_date: "Loading date...",
+        settings_preferences: "Preferences",
+        settings_network: "Network",
+        settings_overwrite_existing: "Overwrite existing files",
+        settings_port_start: "Server port start:",
+        hint_port_start: "Programs picks first free port in [start, start+100]",
+        search_mode_novel: "Novel",
     },
 };
 

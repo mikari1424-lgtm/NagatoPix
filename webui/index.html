@@ -21,6 +21,7 @@
                 <img class="search-bar-icon" src="/ui_icons/search.svg" alt="">
                 <select id="search-mode" class="search-bar-mode" onchange="onSearchModeChange()">
                     <option value="illust" data-i18n="search_mode_illust"></option>
+                    <option value="novel" data-i18n="search_mode_novel"></option>
                     <option value="user" data-i18n="search_mode_user"></option>
                 </select>
                 <input type="text" id="search-tag" class="search-bar-input" data-i18n-placeholder="search_tag_ph"
@@ -36,10 +37,6 @@
                 <span class="status-dot" id="conn-status"></span>
                 <span id="conn-text" data-i18n="connecting"></span>
             </div>
-            <select id="lang-switcher" class="topbar-select" onchange="switchLanguage(this.value)">
-                <option value="zh-CN">简体中文</option>
-                <option value="en">English</option>
-            </select>
         </div>
     </header>
     <aside class="sidebar">
@@ -150,58 +147,58 @@
             </div>
         </section>
 
-                <section class="tab sticky-results" id="tab-ranking">
-                    <div class="panel controls">
-                        <div class="ranking-type-tabs" id="ranking-type-tabs">
-                            <button class="ranking-type-tab active" data-type="day" onclick="onRankingTypeClick('day')"
-                                data-i18n="ranking_day"></button>
-                            <button class="ranking-type-tab" data-type="week" onclick="onRankingTypeClick('week')"
-                                data-i18n="ranking_week"></button>
-                            <button class="ranking-type-tab" data-type="month" onclick="onRankingTypeClick('month')"
-                                data-i18n="ranking_month"></button>
-                            <button class="ranking-type-tab" data-type="day_male" onclick="onRankingTypeClick('day_male')"
-                                data-i18n="ranking_day_male"></button>
-                            <button class="ranking-type-tab" data-type="day_female" onclick="onRankingTypeClick('day_female')"
-                                data-i18n="ranking_day_female"></button>
-                            <button class="ranking-type-tab" data-type="week_original" onclick="onRankingTypeClick('week_original')"
-                                data-i18n="ranking_week_original"></button>
-                            <button class="ranking-type-tab" data-type="week_rookie" onclick="onRankingTypeClick('week_rookie')"
-                                data-i18n="ranking_week_rookie"></button>
-                            <button class="ranking-type-tab" data-type="day_r18" onclick="onRankingTypeClick('day_r18')"
-                                data-i18n="ranking_day_r18"></button>
-                        </div>
-                        <div class="row" id="ranking-date-bar" style="display:none">
-                            <label data-i18n="ranking_date"></label>
-                            <select id="ranking-date-select" onchange="onRankingDateChange()"></select>
-                            <span class="status-text" id="ranking-status"></span>
-                        </div>
-                        <div class="cloud-toggles">
-                            <button class="cloud-toggle-btn" type="button" onclick="toggleTagCloud('ranking-tags', this)">
-                                <img class="expand-arrow" src="/ui_icons/expand.svg" alt="">
-                                <span data-i18n="label_tag_cloud"></span>
-                            </button>
-                        </div>
-                        <div class="tag-cloud-wrap" id="ranking-tags-wrap" style="display:none">
-                            <div class="tag-cloud" id="ranking-tag-cloud"></div>
-                        </div>
-                    </div>
-                    <div class="panel results-panel">
-                        <div id="ranking-list"></div>
-                    </div>
-                </section>
+        <section class="tab sticky-results" id="tab-ranking">
+            <div class="panel controls">
+                <div class="ranking-type-tabs" id="ranking-type-tabs">
+                    <button class="ranking-type-tab active" data-type="day" onclick="onRankingTypeClick('day')"
+                        data-i18n="ranking_day"></button>
+                    <button class="ranking-type-tab" data-type="week" onclick="onRankingTypeClick('week')"
+                        data-i18n="ranking_week"></button>
+                    <button class="ranking-type-tab" data-type="month" onclick="onRankingTypeClick('month')"
+                        data-i18n="ranking_month"></button>
+                    <button class="ranking-type-tab" data-type="day_male" onclick="onRankingTypeClick('day_male')"
+                        data-i18n="ranking_day_male"></button>
+                    <button class="ranking-type-tab" data-type="day_female" onclick="onRankingTypeClick('day_female')"
+                        data-i18n="ranking_day_female"></button>
+                    <button class="ranking-type-tab" data-type="week_original"
+                        onclick="onRankingTypeClick('week_original')" data-i18n="ranking_week_original"></button>
+                    <button class="ranking-type-tab" data-type="week_rookie" onclick="onRankingTypeClick('week_rookie')"
+                        data-i18n="ranking_week_rookie"></button>
+                    <button class="ranking-type-tab" data-type="day_r18" onclick="onRankingTypeClick('day_r18')"
+                        data-i18n="ranking_day_r18"></button>
+                </div>
+                <div class="row" id="ranking-date-bar" style="display:none">
+                    <label data-i18n="ranking_date"></label>
+                    <select id="ranking-date-select" onchange="onRankingDateChange()"></select>
+                    <span class="status-text" id="ranking-status"></span>
+                </div>
+                <div class="cloud-toggles">
+                    <button class="cloud-toggle-btn" type="button" onclick="toggleTagCloud('ranking-tags', this)">
+                        <img class="expand-arrow" src="/ui_icons/expand.svg" alt="">
+                        <span data-i18n="label_tag_cloud"></span>
+                    </button>
+                </div>
+                <div class="tag-cloud-wrap" id="ranking-tags-wrap" style="display:none">
+                    <div class="tag-cloud" id="ranking-tag-cloud"></div>
+                </div>
+            </div>
+            <div class="panel results-panel">
+                <div id="ranking-list"></div>
+            </div>
+        </section>
 
         <section class="tab sticky-results" id="tab-search">
             <div class="panel search-header-card" id="search-header-card" style="display:none">
-                                <h2 class="search-header-title">
-                                    <span id="search-header-title-text"></span>
-                                    <div class="search-ext-wrap">
-                                        <button class="search-header-wiki" type="button" id="search-ext-btn" onclick="toggleSearchExtMenu(event)"
-                                            data-i18n-title="btn_search_encyclopedia">
-                                            <img class="btn-icon" src="/ui_icons/search_ext.svg" alt="">
-                                        </button>
-                                        <div class="ext-search-menu" id="ext-search-menu" style="display:none"></div>
-                                    </div>
-                                </h2>
+                <h2 class="search-header-title">
+                    <span id="search-header-title-text"></span>
+                    <div class="search-ext-wrap">
+                        <button class="search-header-wiki" type="button" id="search-ext-btn"
+                            onclick="toggleSearchExtMenu(event)" data-i18n-title="btn_search_encyclopedia">
+                            <img class="btn-icon" src="/ui_icons/search_ext.svg" alt="">
+                        </button>
+                        <div class="ext-search-menu" id="ext-search-menu" style="display:none"></div>
+                    </div>
+                </h2>
                 <div class="search-header-total" id="search-header-total"></div>
                 <div class="search-header-actions">
                     <button class="search-tag-toggle" type="button" onclick="toggleSearchTagCloud('hot', this)">
@@ -219,13 +216,6 @@
                 <div class="search-tag-cloud-wrap" id="search-tag-all-wrap" style="display:none">
                     <div class="tag-cloud" id="search-tag-all-cloud"></div>
                 </div>
-            </div>
-
-            <div class="search-pane-tabs" id="search-pane-tabs" style="display:none">
-                <button class="search-pane-tab active" type="button" id="search-pane-tab-illust"
-                    onclick="switchSearchPane('illust')" data-i18n="search_pane_illust"></button>
-                <button class="search-pane-tab" type="button" id="search-pane-tab-novel"
-                    onclick="switchSearchPane('novel')" data-i18n="search_pane_novel"></button>
             </div>
 
             <div class="panel results-panel search-result-pane" id="search-result-pane-illust">
@@ -246,12 +236,12 @@
                     <span class="status-text" id="udetail-status"></span>
                 </div>
                 <div id="udetail-header" style="margin-top:8px"></div>
-                                <div class="search-pane-tabs" id="udetail-pane-tabs">
-                                    <button class="search-pane-tab active" type="button" id="udetail-pane-tab-illust"
-                                        onclick="switchUserDetailPane('illust')" data-i18n="search_pane_illust"></button>
-                                    <button class="search-pane-tab" type="button" id="udetail-pane-tab-novel" onclick="switchUserDetailPane('novel')"
-                                        data-i18n="search_pane_novel"></button>
-                                </div>
+                <div class="search-pane-tabs" id="udetail-pane-tabs">
+                    <button class="search-pane-tab active" type="button" id="udetail-pane-tab-illust"
+                        onclick="switchUserDetailPane('illust')" data-i18n="search_pane_illust"></button>
+                    <button class="search-pane-tab" type="button" id="udetail-pane-tab-novel"
+                        onclick="switchUserDetailPane('novel')" data-i18n="search_pane_novel"></button>
+                </div>
                 <div class="cloud-section collapsed" id="cloud-udetail">
                     <div class="cloud-header" onclick="toggleCloud('cloud-udetail')">
                         <span data-i18n="label_tag_cloud"></span>
@@ -262,12 +252,12 @@
                     <div class="tag-cloud" id="udetail-tag-cloud"></div>
                 </div>
             </div>
-                        <div class="panel results-panel search-result-pane active" id="user-detail-pane-illust">
-                            <div id="user-detail-list"></div>
-                        </div>
-                        <div class="panel results-panel search-result-pane" id="user-detail-pane-novel">
-                            <div id="user-detail-novel-list"></div>
-                        </div>
+            <div class="panel results-panel search-result-pane active" id="user-detail-pane-illust">
+                <div id="user-detail-list"></div>
+            </div>
+            <div class="panel results-panel search-result-pane" id="user-detail-pane-novel">
+                <div id="user-detail-novel-list"></div>
+            </div>
         </section>
 
         <section class="tab" id="tab-download">
@@ -374,74 +364,62 @@
         </section>
 
         <section class="tab" id="tab-settings">
-
-            <!-- ============ Account ============ -->
             <div class="panel">
-                <h3 data-i18n="settings_account"></h3>
+                <h3 data-i18n="settings_download"></h3>
                 <div class="row">
-                    <label class="label-wide" data-i18n="settings_language"></label>
-                    <select id="cfg-language" style="flex:1">
-                        <option value="auto" data-i18n="lang_auto"></option>
-                        <option value="zh-CN">简体中文</option>
-                        <option value="en">English</option>
-                    </select>
+                    <label class="label-wide" data-i18n="settings_dir"></label>
+                    <input type="text" id="cfg-download.dir" style="flex:1">
                 </div>
-                <div class="row">
-                    <label class="label-wide" data-i18n="settings_theme"></label>
-                    <select id="cfg-theme" style="flex:1">
-                        <option value="dark" data-i18n="theme_dark"></option>
-                        <option value="light" data-i18n="theme_light"></option>
-                    </select>
-                </div>
-                <div class="row">
-                    <button class="primary" onclick="saveConfig(false)" data-i18n="btn_save"></button>
-                    <button class="secondary" onclick="testLogin()" data-i18n="btn_test_login"></button>
-                    <button class="secondary" onclick="testLatency()" data-i18n="btn_test_latency"></button>
-                </div>
-            </div>
-
-            <!-- ============ Performance (download) ============ -->
-            <div class="panel">
-                <h3 data-i18n="settings_performance"></h3>
                 <div class="row">
                     <label class="label-wide" data-i18n="settings_download_mode"></label>
-                    <select id="cfg-performance.download_mode" style="flex:1">
+                    <select id="cfg-download.mode" style="flex:1">
                         <option value="normal" data-i18n="dl_preset_normal"></option>
                         <option value="high" data-i18n="dl_preset_high"></option>
                     </select>
                 </div>
                 <div class="row">
                     <label class="label-wide" data-i18n="settings_parallel_workers"></label>
-                    <input type="number" id="cfg-performance.parallel_workers" min="0" max="64" style="width:100px">
+                    <input type="number" id="cfg-download.parallel_workers" min="0" max="64" style="width:100px">
                     <span class="hint-text" data-i18n="hint_workers_auto"></span>
                 </div>
                 <div class="row">
                     <label class="label-wide" data-i18n="settings_dl_delay"></label>
-                    <input type="number" id="cfg-performance.download_delay" step="0.1" min="0" style="width:100px">
+                    <input type="number" id="cfg-download.delay" step="0.1" min="0" style="width:100px">
                     <label class="label-wide" data-i18n="settings_max_retries"></label>
-                    <input type="number" id="cfg-performance.max_retries" min="1" style="width:100px">
+                    <input type="number" id="cfg-download.max_retries" min="1" style="width:100px">
+                </div>
+                <div class="row">
+                    <label><input type="checkbox" id="cfg-download.metadata_cache">
+                        <span data-i18n="settings_cache_download_metadata"></span></label>
+                </div>
+                <div class="row">
+                    <label><input type="checkbox" id="cfg-download.overwrite_existing">
+                        <span data-i18n="settings_overwrite_existing"></span></label>
+                </div>
+                <div class="adv-hint" data-i18n="hint_cache_download_metadata"></div>
+                <div class="row">
+                    <label class="label-wide" data-i18n="dl_ugoira_format"></label>
+                    <select id="cfg-download.ugoira_format" style="flex:1; max-width:320px">
+                        <option value="gif" data-i18n="ugoira_gif"></option>
+                        <option value="apng" data-i18n="ugoira_apng"></option>
+                        <option value="webp" data-i18n="ugoira_webp"></option>
+                    </select>
                 </div>
             </div>
 
-            <!-- ============ API ============ -->
             <div class="panel">
                 <h3 data-i18n="settings_api"></h3>
-
                 <div class="row">
                     <label class="label-wide" data-i18n="settings_api_delay"></label>
                     <input type="number" id="cfg-api.request_delay" step="0.1" min="0" style="width:100px">
-                    <label class="label-wide" data-i18n="settings_rate_delay"></label>
-                    <input type="number" id="cfg-api.rate_limit_wait" min="1" style="width:100px">
+                    <label class="label-wide" data-i18n="settings_parallel_requests"></label>
+                    <input type="number" id="cfg-api.parallel_requests" min="1" max="8" style="width:100px">
                 </div>
-
+                <div class="adv-hint" data-i18n="hint_api_parallel"></div>
                 <div class="row">
                     <label class="label-wide" data-i18n="settings_max_results"></label>
                     <input type="number" id="cfg-api.max_results" min="1" max="500" style="width:100px">
-                    <label class="label-wide" data-i18n="settings_parallel_requests"></label>
-                    <input type="number" id="cfg-api.parallel_requests" min="1" max="8" style="width:100px">
-                    <span class="hint-text" data-i18n="hint_api_parallel"></span>
                 </div>
-
                 <div class="row">
                     <label class="label-wide" data-i18n="settings_web_ajax_mode"></label>
                     <select id="cfg-api.web_ajax_mode" style="flex:1; max-width:320px">
@@ -452,19 +430,42 @@
                 <div class="adv-hint" data-i18n="web_ajax_mode_hint"></div>
             </div>
 
-            <!-- ============ Download path ============ -->
             <div class="panel">
-                <h3 data-i18n="settings_download"></h3>
+                <h3 data-i18n="settings_preferences"></h3>
                 <div class="row">
-                    <label class="label-wide" data-i18n="settings_dir"></label>
-                    <input type="text" id="cfg-download_dir" style="flex:1">
+                    <label class="label-wide" data-i18n="settings_language"></label>
+                    <select id="cfg-preferences.language" style="flex:1">
+                        <option value="auto" data-i18n="lang_auto"></option>
+                        <option value="zh-CN">简体中文</option>
+                        <option value="en">English</option>
+                    </select>
                 </div>
                 <div class="row">
-                    <label class="label-wide" data-i18n="settings_proxy"></label>
-                    <input type="text" id="cfg-proxy" style="flex:1" placeholder="socks5://127.0.0.1:1080">
+                    <label class="label-wide" data-i18n="settings_theme"></label>
+                    <select id="cfg-preferences.theme" style="flex:1">
+                        <option value="dark" data-i18n="theme_dark"></option>
+                        <option value="light" data-i18n="theme_light"></option>
+                    </select>
                 </div>
             </div>
 
+            <div class="panel">
+                <h3 data-i18n="settings_network"></h3>
+                <div class="row">
+                    <label class="label-wide" data-i18n="settings_proxy"></label>
+                    <input type="text" id="cfg-network.proxy" style="flex:1" placeholder="socks5://127.0.0.1:1080">
+                </div>
+                <div class="row">
+                    <label class="label-wide" data-i18n="settings_port_start"></label>
+                    <input type="number" id="cfg-network.port_start" min="1024" max="65535" style="width:120px">
+                    <span class="hint-text" data-i18n="hint_port_start"></span>
+                </div>
+                <div class="row">
+                    <button class="primary" onclick="saveConfig(false)" data-i18n="btn_save"></button>
+                    <button class="secondary" onclick="testLogin()" data-i18n="btn_test_login"></button>
+                    <button class="secondary" onclick="testLatency()" data-i18n="btn_test_latency"></button>
+                </div>
+            </div>
         </section>
     </main>
 
@@ -663,15 +664,16 @@
                 <div class="novel-series" id="nv-series"></div>
                 <div class="iv-tags" id="nv-tags"></div>
             </div>
-                    <div class="novel-viewer-nav">
-                        <button class="secondary" id="nv-prev" onclick="novelViewerPrev()" data-i18n="novel_prev"></button>
-                        <button class="secondary" id="nv-series-btn" onclick="openNovelSeries()" data-i18n="novel_series"></button>
-                        <button class="secondary" id="nv-next" onclick="novelViewerNext()" data-i18n="novel_next"></button>
-                        <button class="iv-action-btn" id="nv-download" onclick="downloadCurrentNovel()">
-                            <img class="btn-icon" src="/ui_icons/download.svg" alt="">
-                            <span data-i18n="btn_download"></span>
-                        </button>
-                    </div>
+            <div class="novel-viewer-nav">
+                <button class="secondary" id="nv-prev" onclick="novelViewerPrev()" data-i18n="novel_prev"></button>
+                <button class="secondary" id="nv-series-btn" onclick="openNovelSeries()"
+                    data-i18n="novel_series"></button>
+                <button class="secondary" id="nv-next" onclick="novelViewerNext()" data-i18n="novel_next"></button>
+                <button class="iv-action-btn" id="nv-download" onclick="downloadCurrentNovel()">
+                    <img class="btn-icon" src="/ui_icons/download.svg" alt="">
+                    <span data-i18n="btn_download"></span>
+                </button>
+            </div>
             <div class="novel-text" id="nv-text"></div>
         </div>
     </div>
