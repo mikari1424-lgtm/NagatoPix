@@ -25,16 +25,20 @@ let searchNovelItems = [],
 let searchActivePane = "illust";
 let searchCurrentTag = "";
 let searchTotal = 0;
+let searchNovelTotal = 0;
 let searchRelatedTags = [];
+let searchTagPixpedia = null;
 let searchDataKey = "";
+let ivCaptionId = "";
 
-function computeSearchKey(tag, target, sort, page, pages) {
+function computeSearchKey(tag, target, sort, page, pages, mode) {
     return [
         tag || "",
         target || "exact_match_for_tags",
         sort || "date_desc",
         page || 1,
         pages || 1,
+        mode || "illust",
     ].join("|");
 }
 let userSearchItems = [];
@@ -320,7 +324,15 @@ function handleMessage(msg) {
                 msg.total,
                 msg.related_tags,
                 msg.tag,
+                msg.mode,
+                msg.novel_total,
+                msg.tag_pixpedia,
             );
+            break;
+        case "illust_caption":
+            if (ivCaptionId && String(msg.id) === String(ivCaptionId)) {
+                applyIllustCaption(msg.caption, msg.caption_parts);
+            }
             break;
         case "search_progress":
             setSearchLoading(
@@ -893,6 +905,7 @@ const TABLE_COLUMNS = {
     "search-list-novel": [
         { key: "id", get: "th_pid", numeric: true },
         { key: "title", get: "th_title", numeric: false },
+        { key: "text_length", get: "th_words", numeric: true },
         { key: "author", get: "th_author", numeric: false },
         { key: "views", get: "th_views", numeric: true },
         { key: "bookmarks", get: "th_bookmarks", numeric: true },
@@ -938,6 +951,8 @@ function getSortValue(item, key) {
             return (item.title || "").toLowerCase();
         case "page_count":
             return item.page_count || 1;
+        case "text_length":
+            return item.text_length || 0;
         case "author":
             return (item.author || "").toLowerCase();
         case "views":
@@ -1121,6 +1136,9 @@ function renderTable(containerId, items, opts) {
                         break;
                     case "page_count":
                         tds += `<td data-col="page_count" style="text-align:right">${it.page_count || 1}</td>`;
+                        break;
+                    case "text_length":
+                        tds += `<td data-col="text_length" style="text-align:right">${formatNum(it.text_length)}</td>`;
                         break;
                     case "author":
                         if (it.author_id) {
@@ -1307,11 +1325,12 @@ function onRouteSearch(params) {
     setEl("search-mode", (el) => (el.value = mode));
     onSearchModeChange();
     setEl("search-tag", (el) => (el.value = tag));
+    const prefix = mode === "novel" ? "nsearch-" : "search-";
     if (params.target)
-        setEl("search-target", (el) => (el.value = params.target));
-    if (params.sort) setEl("search-sort", (el) => (el.value = params.sort));
-    if (params.page) setEl("search-page", (el) => (el.value = params.page));
-    if (params.pages) setEl("search-pages", (el) => (el.value = params.pages));
+        setEl(prefix + "target", (el) => (el.value = params.target));
+    if (params.sort) setEl(prefix + "sort", (el) => (el.value = params.sort));
+    if (params.page) setEl(prefix + "page", (el) => (el.value = params.page));
+    if (params.pages) setEl(prefix + "pages", (el) => (el.value = params.pages));
 
     const wantKey = computeSearchKey(
         tag,
@@ -1319,6 +1338,7 @@ function onRouteSearch(params) {
         params.sort,
         params.page,
         params.pages,
+        mode,
     );
     if (searchDataKey === wantKey) {
         renderSearchHeaderCard();
@@ -1347,14 +1367,19 @@ function doSearch() {
     if (!tag) return toast(t("toast_need_tag"), "error");
 
     const mode = document.getElementById("search-mode")?.value || "illust";
-    const sort = document.getElementById("search-sort")?.value || "date_desc";
+    const isNovel = mode === "novel";
+    const prefix = isNovel ? "nsearch-" : "search-";
+    const sort =
+        document.getElementById(prefix + "sort")?.value || "date_desc";
     const target =
-        document.getElementById("search-target")?.value ||
+        document.getElementById(prefix + "target")?.value ||
         "exact_match_for_tags";
-    const durationRaw = document.getElementById("search-duration")?.value || "";
+    const durationRaw =
+        document.getElementById(prefix + "duration")?.value || "";
     const startPage =
-        parseInt(document.getElementById("search-page")?.value) || 1;
-    const pages = parseInt(document.getElementById("search-pages")?.value) || 1;
+        parseInt(document.getElementById(prefix + "page")?.value) || 1;
+    const pages =
+        parseInt(document.getElementById(prefix + "pages")?.value) || 1;
 
     // filters by mode
     let filters;
@@ -1379,8 +1404,9 @@ function doSearch() {
 
     let duration, start_date, end_date;
     if (durationRaw === "custom") {
-        start_date = document.getElementById("search-start-date")?.value || "";
-        end_date = document.getElementById("search-end-date")?.value || "";
+        start_date =
+            document.getElementById(prefix + "start-date")?.value || "";
+        end_date = document.getElementById(prefix + "end-date")?.value || "";
         if (!start_date || !end_date)
             return toast(t("toast_need_dates"), "error");
         if (start_date > end_date) return toast(t("toast_date_order"), "error");
@@ -1388,7 +1414,7 @@ function doSearch() {
         duration = durationRaw;
     }
 
-    searchDataKey = computeSearchKey(tag, target, sort, startPage, pages);
+    searchDataKey = computeSearchKey(tag, target, sort, startPage, pages, mode);
 
     const activePane = mode === "novel" ? "novel" : "illust";
     setEl("search-result-pane-illust", (el) =>
@@ -1409,7 +1435,7 @@ function doSearch() {
     );
     setEl("search-header-card", (el) => (el.style.display = "none"));
 
-    send({
+    const payload = {
         cmd: "search",
         tag,
         sort,
@@ -1420,7 +1446,17 @@ function doSearch() {
         start_page: startPage,
         pages,
         filters,
-    });
+    };
+    if (isNovel) {
+        payload.mode = "novel";
+        payload.lang =
+            document.getElementById("nsearch-lang")?.value || "all";
+        payload.min_chars =
+            parseInt(document.getElementById("nsearch-min-chars")?.value) || 0;
+        payload.max_chars =
+            parseInt(document.getElementById("nsearch-max-chars")?.value) || 0;
+    }
+    send(payload);
 
     setRoute("search", {
         tag,
@@ -1493,18 +1529,29 @@ function renderSearchResults(
     total,
     relatedTags,
     tag,
+    mode,
+    novelTotal,
+    tagPixpedia,
 ) {
     searchIllustItemsRaw = items || [];
     searchNovelItemsRaw = novelItems || [];
     searchCurrentTag = tag || "";
     searchTotal = total || 0;
+    searchNovelTotal = novelTotal || 0;
+    searchTagPixpedia = tagPixpedia || null;
     searchRelatedTags = relatedTags || [];
 
     if (filterSets["search-tag-all-cloud"]) {
         filterSets["search-tag-all-cloud"].clear();
     }
 
-    searchActivePane = searchIllustItemsRaw.length ? "illust" : "novel";
+    if (mode === "novel" && searchNovelItemsRaw.length) {
+        searchActivePane = "novel";
+    } else if (searchIllustItemsRaw.length) {
+        searchActivePane = "illust";
+    } else {
+        searchActivePane = "novel";
+    }
 
     renderSearchHeaderCard();
     applySearchBookmarkFilter(startPage, pages);
@@ -1529,7 +1576,7 @@ function renderSearchHeaderCard() {
     if (!card) return;
 
     const mode = document.getElementById("search-mode")?.value;
-    if (mode !== "illust" || !searchCurrentTag) {
+    if (mode === "user" || !searchCurrentTag) {
         card.style.display = "none";
         return;
     }
@@ -1555,13 +1602,57 @@ function renderSearchHeaderCard() {
         "applySearchTagFilter",
     );
 
+    renderSearchPixpedia();
     updateSearchHeaderTotal();
+}
+
+function renderSearchPixpedia() {
+    const img = document.getElementById("search-header-pixpedia");
+    if (!img) return;
+    const pp = searchTagPixpedia;
+    if (!pp || !pp.image) {
+        img.style.display = "none";
+        img.removeAttribute("src");
+        img.dataset.pixpediaId = "";
+        return;
+    }
+    img.style.display = "";
+    img.src = `/proxy_image?url=${encodeURIComponent(pp.image)}`;
+    img.dataset.pixpediaId = pp.id || "";
+    img.title = t("tag_pixpedia_open");
+}
+
+function openSearchTagPixpedia() {
+    const img = document.getElementById("search-header-pixpedia");
+    const id = img?.dataset.pixpediaId;
+    if (!id) return;
+    const idx = searchIllustItems.findIndex(
+        (it) => String(it.id) === String(id),
+    );
+    if (idx >= 0) {
+        switchSearchPane("illust");
+        openIllustViewer("search-list-illust", idx);
+        return;
+    }
+    const nIdx = searchNovelItems.findIndex(
+        (it) => String(it.id) === String(id),
+    );
+    if (nIdx >= 0) {
+        switchSearchPane("novel");
+        openNovelViewer(id);
+        return;
+    }
+    window.open(
+        `https://www.pixiv.net/artworks/${encodeURIComponent(id)}`,
+        "_blank",
+        "noopener",
+    );
 }
 
 function updateSearchHeaderTotal() {
     setEl("search-header-total", (el) => {
         if (searchActivePane === "novel") {
-            const n = searchNovelItemsRaw.length;
+            const n = searchNovelTotal || searchNovelItemsRaw.length;
             el.textContent = n ? t("search_total_novel", formatNum(n)) : "";
         } else {
             el.textContent = searchTotal
@@ -1696,16 +1787,20 @@ function doSearchFromTopbar() {
 function onSearchModeChange() {
     const mode = document.getElementById("search-mode").value;
     const isUser = mode === "user";
+    const isNovel = mode === "novel";
     setEl(
         "search-settings-illust",
-        (el) => (el.style.display = isUser ? "none" : ""),
+        (el) => (el.style.display = mode === "illust" ? "" : "none"),
+    );
+    setEl(
+        "search-settings-novel",
+        (el) => (el.style.display = isNovel ? "" : "none"),
     );
     setEl(
         "search-settings-user",
         (el) => (el.style.display = isUser ? "" : "none"),
     );
     // 小说模式隐藏插画专属：作品类型/收藏数
-    const isNovel = mode === "novel";
     setEl(
         "search-type-row",
         (el) => (el.style.display = isNovel ? "none" : ""),
@@ -1722,11 +1817,23 @@ function onSearchModeChange() {
     );
 }
 
+function onNovelDurationChange() {
+    const v = document.getElementById("nsearch-duration").value;
+    setEl(
+        "nsearch-custom-dates",
+        (el) => (el.style.display = v === "custom" ? "" : "none"),
+    );
+}
+
 function openSearchSettings() {
     const mode = document.getElementById("search-mode").value;
     setEl(
         "search-settings-illust",
         (el) => (el.style.display = mode === "illust" ? "" : "none"),
+    );
+    setEl(
+        "search-settings-novel",
+        (el) => (el.style.display = mode === "novel" ? "" : "none"),
     );
     setEl(
         "search-settings-user",
@@ -2719,9 +2826,28 @@ function renderIllustViewer() {
     setEl("iv-caption-wrap", (el) => (el.style.display = "none"));
     setEl("iv-caption-btn", (el) => el.classList.remove("expanded"));
 
+    // 打开作品时从 Web Ajax 拉一次最新简介，替换本地列表里可能缺失的 caption
+    ivCaptionId = String(it.id || "");
+    if (ivCaptionId && isConnected) {
+        send({ cmd: "illust_caption", id: ivCaptionId });
+    }
+
     renderIvUser(user, it);
     renderIvActions(it);
     closeShareMenu();
+}
+
+function applyIllustCaption(caption, parts) {
+    const hasParts = Array.isArray(parts) && parts.length;
+    const text = sanitizeCaption(caption || "");
+    if (!hasParts && !text) return;
+    setEl("iv-caption-text", (el) => {
+        if (hasParts) {
+            el.innerHTML = renderCommentParts(parts);
+        } else {
+            el.innerHTML = escapeHtml(text).replace(/\n/g, "<br>");
+        }
+    });
 }
 
 function openNovelViewer(nid) {
@@ -3680,39 +3806,61 @@ function restoreUiState(state) {
     }
 
     // Search
-        if (state.search) {
-            const s = state.search;
-            searchCurrentTag = s.tag || "";
-            searchTotal = (s.header && s.header.total) || 0;
-            searchRelatedTags = (s.header && s.header.related_tags) || [];
-            searchIllustItemsRaw = s.illust_items || [];
-            searchNovelItemsRaw = s.novel_items || [];
-            searchIllustItems = searchIllustItemsRaw.slice();
-            searchNovelItems = searchNovelItemsRaw.slice();
+    if (state.search) {
+        const s = state.search;
+        const mode = s.mode === "novel" ? "novel" : "illust";
+        searchCurrentTag = s.tag || "";
+        searchTotal = (s.header && s.header.total) || 0;
+        searchNovelTotal =
+            (s.header && s.header.novel_total) || s.novel_total || 0;
+        searchTagPixpedia = (s.header && s.header.tag_pixpedia) || null;
+        searchRelatedTags = (s.header && s.header.related_tags) || [];
+        searchIllustItemsRaw = s.illust_items || [];
+        searchNovelItemsRaw = s.novel_items || [];
+        searchIllustItems = searchIllustItemsRaw.slice();
+        searchNovelItems = searchNovelItemsRaw.slice();
 
-            // 恢复后同步 key，确保刷新页面 / 进入 #search/tag=X 时不会重复请求
-            searchDataKey = computeSearchKey(
-                s.tag || "",
-                s.target || "exact_match_for_tags",
-                s.sort || "date_desc",
-                s.page || 1,
-                s.pages || 1,
-            );
+        setEl("search-mode", (el) => (el.value = mode));
+        onSearchModeChange();
 
-            if (s.tag) setEl("search-tag", (el) => (el.value = s.tag));
-            if (s.sort) setEl("search-sort", (el) => (el.value = s.sort));
-            if (s.target) setEl("search-target", (el) => (el.value = s.target));
-            if (s.page) setEl("search-page", (el) => (el.value = s.page));
-            if (s.pages) setEl("search-pages", (el) => (el.value = s.pages));
+        // 恢复后同步 key，确保刷新页面 / 进入 #search/tag=X 时不会重复请求
+        searchDataKey = computeSearchKey(
+            s.tag || "",
+            s.target || "exact_match_for_tags",
+            s.sort || "date_desc",
+            s.page || 1,
+            s.pages || 1,
+            mode,
+        );
 
-            if (searchIllustItemsRaw.length || searchNovelItemsRaw.length) {
-                renderSearchHeaderCard();
-                renderTable("search-list-illust", searchIllustItems);
-                renderTable("search-list-novel", searchNovelItems);
-                setEl("search-pane-tabs", (el) => (el.style.display = ""));
-                switchSearchPane(s.pane || "illust");
-            }
+        const prefix = mode === "novel" ? "nsearch-" : "search-";
+        if (s.tag) setEl("search-tag", (el) => (el.value = s.tag));
+        if (s.sort) setEl(prefix + "sort", (el) => (el.value = s.sort));
+        if (s.target) setEl(prefix + "target", (el) => (el.value = s.target));
+        if (s.page) setEl(prefix + "page", (el) => (el.value = s.page));
+        if (s.pages) setEl(prefix + "pages", (el) => (el.value = s.pages));
+        if (s.duration)
+            setEl(prefix + "duration", (el) => (el.value = s.duration));
+        if (s.start_date)
+            setEl(prefix + "start-date", (el) => (el.value = s.start_date));
+        if (s.end_date)
+            setEl(prefix + "end-date", (el) => (el.value = s.end_date));
+        if (mode === "novel") {
+            if (s.lang) setEl("nsearch-lang", (el) => (el.value = s.lang));
+            setEl("nsearch-min-chars", (el) => (el.value = s.min_chars || 0));
+            setEl("nsearch-max-chars", (el) => (el.value = s.max_chars || 0));
         }
+        onDurationChange();
+        onNovelDurationChange();
+
+        if (searchIllustItemsRaw.length || searchNovelItemsRaw.length) {
+            renderSearchHeaderCard();
+            renderTable("search-list-illust", searchIllustItems);
+            renderTable("search-list-novel", searchNovelItems);
+            setEl("search-pane-tabs", (el) => (el.style.display = ""));
+            switchSearchPane(s.pane || mode);
+        }
+    }
 
     // Recommend
     if (state.recommend?.items?.length) {

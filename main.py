@@ -22,6 +22,7 @@ import socket
 import sys
 import locale
 import logging
+import html as html_lib
 import zipfile
 import shutil
 from concurrent.futures import ThreadPoolExecutor
@@ -45,7 +46,7 @@ except ModuleNotFoundError:  # Python < 3.11
 from i18n import t, meta, set_language
 
 
-VERSION = "1.3.2"
+VERSION = "1.3.3"
 
 
 # ============================================================
@@ -991,6 +992,39 @@ class WebAjaxClient:
             write_log(f"Ajax search '{word}': empty body", 'warn')
         return body if isinstance(body, dict) else {}
 
+    def tag_info(self, tag: str) -> dict:
+        """Tag page header card (pixpedia image / illust id)."""
+        tag_enc = quote(tag, safe='')
+        body = self._get(
+            f"search/tags/{tag_enc}",
+            {'lang': self.lang_param()},
+            referer=f"{self.WWW}/tags/{tag_enc}")
+        return body if isinstance(body, dict) else {}
+
+    def search_novels(self, word, page=1, s_mode='s_tag_full',
+                      order='date_d', lang=None):
+        """Novel search via Ajax (carries language / text count / rating)."""
+        word_enc = quote(word, safe='')
+        params = {
+            'p': page,
+            's_mode': s_mode,
+            'order': order,
+            'mode': 'all',
+        }
+        if lang and lang != 'all':
+            params['lang'] = lang
+        body = self._get(
+            f"search/novels/{word_enc}", params,
+            referer=f"{self.WWW}/tags/{word_enc}/novels")
+        if isinstance(body, dict) and body:
+            novel = body.get('novel') or {}
+            write_log(
+                f"Ajax novel search '{word}': total={novel.get('total')}, "
+                f"page={page}", 'info')
+        else:
+            write_log(f"Ajax novel search '{word}': empty body", 'warn')
+        return body if isinstance(body, dict) else {}
+
 
 # ============================================================
 # Pixiv API / 双通道封装
@@ -1020,12 +1054,28 @@ class PixivAPI:
                       'warn')
 
     # ---------- Login ----------
+    def _accept_language(self) -> str:
+        """Accept-Language value matching the UI language."""
+        if self.config.effective_language() == 'zh-CN':
+            return 'zh-CN,zh;q=0.9,en;q=0.8,ja;q=0.5'
+        return 'en-US,en;q=0.9,ja;q=0.8,zh-CN;q=0.5'
+
+    def sync_language(self):
+        """Push the UI language to the Pixiv API client."""
+        try:
+            if self.api is not None:
+                self.api.set_accept_language(self._accept_language())
+        except Exception as e:
+            write_log(f"sync language failed: {e}", 'warn')
+
     def login(self):
         if self.api is None:
             self.api = AppPixivAPI()
             proxy = self.config.get('network.proxy')
             if proxy:
                 self.api.set_proxy(proxy)
+
+        self.sync_language()
 
         rt = self.accounts.get_current_refresh_token() if self.accounts else ''
         if not rt:
@@ -1272,6 +1322,65 @@ class PixivAPI:
             write_log(f"Ajax search meta failed: {e}", 'warn')
             return {}
 
+    def search_novels_ajax(self, word, page=1, target=None, sort=None,
+                           lang='all'):
+        """Novel search via Web Ajax; items normalized for format_novel."""
+        if not (self.web_ajax and self.web_ajax.is_available()):
+            write_log("Ajax novel search skipped: Web Ajax unavailable",
+                      'info')
+            return None
+        s_mode_map = {
+            'partial_match_for_tags': 's_tag',
+            'exact_match_for_tags': 's_tag_full',
+            'title_and_caption': 's_tc',
+        }
+        order_map = {
+            'date_desc': 'date_d',
+            'date_asc': 'date',
+            'popular_desc': 'popular_d',
+        }
+        try:
+            body = self.web_ajax.search_novels(
+                word, page=page,
+                s_mode=s_mode_map.get(target, 's_tag_full'),
+                order=order_map.get(sort, 'date_d'),
+                lang=lang)
+        except Exception as e:
+            write_log(f"Ajax novel search failed: {e}", 'warn')
+            return None
+        novel = body.get('novel') or {}
+        data = novel.get('data') or []
+        items = [self._novel_from_ajax(x) for x in data
+                 if isinstance(x, dict)]
+        return items, novel.get('total')
+
+    @staticmethod
+    def _novel_from_ajax(x: dict) -> dict:
+        """Map an Ajax novel entry to the App API novel shape."""
+        tags = x.get('tags') or []
+        return {
+            'id': x.get('id'),
+            'title': x.get('title', '') or '',
+            'user': {
+                'id': x.get('userId'),
+                'name': x.get('userName', '') or '',
+                'profile_image_urls': {
+                    'medium': x.get('profileImageUrl', '') or ''},
+            },
+            'tags': [{'name': t} for t in tags if isinstance(t, str)],
+            'create_date': x.get('createDate', '') or '',
+            'text_length': x.get('textCount', 0) or 0,
+            'x_restrict': x.get('xRestrict', 0) or 0,
+            'novel_ai_type': x.get('aiType', 0) or 0,
+            'total_view': x.get('viewCount', 0) or 0,
+            'total_bookmarks': x.get('bookmarkCount', 0) or 0,
+            'series': {
+                'id': x.get('seriesId'),
+                'title': x.get('seriesTitle', '') or ''},
+            'is_bookmarked': bool(x.get('isBookmarked')),
+            '_language': (x.get('language', '') or '').lower(),
+        }
+
     def follow_user(self, uid, restrict='public'):
         self.ensure_login()
         return self._call_with_retry(
@@ -1500,13 +1609,7 @@ class PixivAPI:
         if not s:
             return ''
         s = re.sub(r'<[^>]+>', '', s)
-        return (s.replace('&nbsp;', ' ')
-                 .replace('&amp;', '&')
-                 .replace('&lt;', '<')
-                 .replace('&gt;', '>')
-                 .replace('&quot;', '"')
-                 .replace('&#39;', "'")
-                 .replace('&apos;', "'"))
+        return html_lib.unescape(s)
 
     def _resolve_pixiv_url(self, href: str) -> str:
         if not href:
@@ -1539,7 +1642,7 @@ class PixivAPI:
         text = re.sub(r'</(p|div|li|h[1-6])>', '\n', text, flags=re.IGNORECASE)
 
         def link_repl(m):
-            href = (m.group(1) or '').strip()
+            href = self._resolve_pixiv_url(m.group(1) or '')
             inner = (m.group(2) or '')
             inner_text = self._strip_tags_and_entities(inner)
             if not inner_text:
@@ -1551,13 +1654,7 @@ class PixivAPI:
         text = re.sub(r'<a\s+[^>]*href=["\']([^"\']*)["\'][^>]*>(.*?)</a>',
                       link_repl, text, flags=re.IGNORECASE | re.DOTALL)
         text = re.sub(r'<[^>]+>', '', text)
-        text = (text.replace('&nbsp;', ' ')
-                    .replace('&amp;', '&')
-                    .replace('&lt;', '<')
-                    .replace('&gt;', '>')
-                    .replace('&quot;', '"')
-                    .replace('&#39;', "'")
-                    .replace('&apos;', "'"))
+        text = html_lib.unescape(text)
         text = re.sub(r'\n{3,}', '\n\n', text)
         text = '\n'.join(line.rstrip() for line in text.split('\n'))
         return text.strip()
@@ -2595,9 +2692,7 @@ def _clean_html_text(s):
     text = re.sub(r'<br\s*/?>', '\n', s, flags=re.IGNORECASE)
     text = re.sub(r'</(p|div|li|h[1-6])>', '\n', text, flags=re.IGNORECASE)
     text = re.sub(r'<[^>]+>', '', text)
-    for a, b in (('&nbsp;', ' '), ('&amp;', '&'), ('&lt;', '<'),
-                 ('&gt;', '>'), ('&quot;', '"'), ('&#39;', "'")):
-        text = text.replace(a, b)
+    text = html_lib.unescape(text)
     return re.sub(r'\n{3,}', '\n\n', text).strip()
 
 # ============================================================
@@ -2694,6 +2789,13 @@ def format_novel(it):
     user = it.get('user', {}) or {}
     avatar = (user.get('profile_image_urls', {}) or {}).get('medium', '')
     tags_out = []
+    x_restrict = it.get('x_restrict', 0) or 0
+    if x_restrict == 1:
+        restriction = 'R-18'
+    elif x_restrict == 2:
+        restriction = 'R-18G'
+    else:
+        restriction = ''
     ai_type = it.get('novel_ai_type', 0)
     if not isinstance(ai_type, int):
         ai_type = 0
@@ -2720,7 +2822,8 @@ def format_novel(it):
         'ai_generated': ai_type == 2,
         'is_original': bool(it.get('is_original')) and ai_type != 2,
         'text_length': it.get('text_length', 0) or 0,
-        'x_restrict': it.get('x_restrict', 0) or 0,
+        'x_restrict': x_restrict,
+        'restriction': restriction,
         'ai_type': it.get('novel_ai_type', 0) or 0,
         'series_id': series.get('id'),
         'series_title': series.get('title', '') or '',
@@ -2782,6 +2885,10 @@ async def handle_command(bridge, cmd, ws):
         if lang in ('zh-CN', 'en'):
             bridge.config.set('preferences.language', lang)
             set_language(lang)
+            try:
+                bridge.worker.api.sync_language()
+            except Exception:
+                pass
             write_log(t('language_loaded', lang=lang), 'info')
             await ws.send_str(json.dumps(
                 {'type': 'language_set', 'lang': lang}))
@@ -2827,6 +2934,7 @@ async def handle_command(bridge, cmd, ws):
     # ---------- Search ----------
     elif c == 'search':
         tag = cmd.get('tag', '')
+        mode = cmd.get('mode', 'illust')
         sort = cmd.get('sort', 'date_desc')
         target = cmd.get('target', 'exact_match_for_tags')
         duration = cmd.get('duration', '') or None
@@ -2835,6 +2943,9 @@ async def handle_command(bridge, cmd, ws):
         pages = max(1, min(200, int(cmd.get('pages', 1))))
         start_page = max(1, int(cmd.get('start_page', 1)))
         filters = cmd.get('filters', {'illust': True, 'manga': True})
+        novel_lang = cmd.get('lang', 'all') or 'all'
+        min_chars = max(0, int(cmd.get('min_chars', 0) or 0))
+        max_chars = max(0, int(cmd.get('max_chars', 0) or 0))
         loop = asyncio.get_event_loop()
 
         if start_date and end_date:
@@ -2850,6 +2961,39 @@ async def handle_command(bridge, cmd, ws):
                 return
             duration = None
 
+        def _novel_date_ok(it):
+            d = (it.get('create_date') or '')[:10]
+            if not d:
+                return True
+            if start_date and d < start_date:
+                return False
+            if end_date and d > end_date:
+                return False
+            if duration:
+                days = {'within_last_day': 1, 'within_last_week': 7,
+                        'within_last_month': 30}.get(duration)
+                if days:
+                    cutoff = (datetime.now()
+                              - timedelta(days=days)).strftime('%Y-%m-%d')
+                    if d < cutoff:
+                        return False
+            return True
+
+        def _novel_lang_ok(it):
+            lang = novel_lang
+            if lang in ('', 'all'):
+                return True
+            il = (it.get('_language') or '').strip().lower()
+            if not il:
+                return False
+            if lang == 'zh':
+                return (il.startswith('zh') and 'tw' not in il
+                        and 'hant' not in il and 'hk' not in il)
+            if lang == 'zh-tw':
+                return (il.startswith('zh')
+                        and ('tw' in il or 'hant' in il or 'hk' in il))
+            return il.startswith(lang)
+
         def do_search():
             api = make_api(bridge)
             api.ensure_login()
@@ -2861,9 +3005,10 @@ async def handle_command(bridge, cmd, ws):
             want_novel = bool(f.get('novel', False))
 
             write_log(
-                f"search '{tag}': filters illust={want_illust} "
+                f"search '{tag}': mode={mode} filters illust={want_illust} "
                 f"manga={want_manga} ugoira={want_ugoira} novel={want_novel}, "
-                f"pages={pages} start_page={start_page}",
+                f"pages={pages} start_page={start_page} lang={novel_lang} "
+                f"chars={min_chars}~{max_chars}",
                 'info')
 
             delay = float(bridge.config.get('api.request_delay', 0.3))
@@ -2900,30 +3045,61 @@ async def handle_command(bridge, cmd, ws):
                 write_log("search: App API loop skipped", 'warn')
 
             novel_raw = []
+            novel_total = None
             if want_novel:
+                ajax_ok = bool(api.web_ajax and api.web_ajax.is_available())
+                app_start = start_date
+                if duration and not app_start:
+                    days = {'within_last_day': 1, 'within_last_week': 7,
+                            'within_last_month': 30}.get(duration)
+                    if days:
+                        app_start = (datetime.now()
+                                     - timedelta(days=days)).strftime(
+                                         '%Y-%m-%d')
                 for i in range(pages):
                     page = start_page + i
                     offset = (page - 1) * 30
                     bridge.broadcast({'type': 'search_progress',
                                       'current': i + 1, 'total': pages,
                                       'page': page, 'kind': 'novel'})
-                    try:
-                        resp = api.search_novel(
-                            tag, target=target, sort=sort, offset=offset,
-                            duration=duration,
-                            start_date=start_date, end_date=end_date)
-                    except Exception as e:
-                        write_log(t('search_page_failed', page=page,
-                                    error=str(e)), 'error')
-                        break
-                    items = resp.get('novels', []) if resp else []
+                    raw_items = []
+                    used_ajax = False
+                    if ajax_ok:
+                        ajax_res = api.search_novels_ajax(
+                            tag, page=page, target=target, sort=sort,
+                            lang=novel_lang)
+                        if ajax_res is not None:
+                            raw_items, novel_total = ajax_res
+                            used_ajax = True
+                    if not used_ajax:
+                        write_log("search novel: App API fallback", 'info')
+                        try:
+                            resp = api.search_novel(
+                                tag, target=target, sort=sort, offset=offset,
+                                start_date=app_start, end_date=end_date)
+                        except Exception as e:
+                            write_log(t('search_page_failed', page=page,
+                                        error=str(e)), 'error')
+                            break
+                        raw_items = resp.get('novels', []) if resp else []
+                        ajax_ok = False
+                    kept = []
+                    for it in raw_items:
+                        if not _novel_date_ok(it):
+                            continue
+                        if used_ajax and not _novel_lang_ok(it):
+                            continue
+                        n = it.get('text_length') or 0
+                        if min_chars and n < min_chars:
+                            continue
+                        if max_chars and n > max_chars:
+                            continue
+                        kept.append(it)
+                    novel_raw.extend(kept)
                     write_log(
-                        f"search novel page {page}: got {len(items)} items",
-                        'info')
-                    if not items:
-                        break
-                    novel_raw.extend(items)
-                    if len(items) < 30:
+                        f"search novel page {page}: {len(raw_items)} raw / "
+                        f"{len(kept)} kept", 'info')
+                    if len(raw_items) < 30:
                         break
                     time.sleep(delay)
 
@@ -2951,15 +3127,28 @@ async def handle_command(bridge, cmd, ws):
                 rt = ajax_body.get('relatedTags') or []
                 related_tags = [x for x in rt if isinstance(x, str)]
 
+            tag_pixpedia = {}
+            if tag and api.web_ajax and api.web_ajax.is_available():
+                tag_body = api.web_ajax.tag_info(tag) or {}
+                pp = tag_body.get('pixpedia') or {}
+                image = pp.get('image') or ''
+                pid = pp.get('id') or ''
+                if image:
+                    tag_pixpedia = {'image': image, 'id': str(pid)}
+                    write_log(f"tag pixpedia '{tag}': id={pid}", 'info')
+
             write_log(
                 f"search done: illust={len(illust_out)} "
                 f"novel={len(novel_out)} total={total} "
+                f"novel_total={novel_total} "
                 f"related={len(related_tags)}",
                 'info')
-            return illust_out, novel_out, total, related_tags
+            return (illust_out, novel_out, total, related_tags,
+                    novel_total, tag_pixpedia)
 
         try:
-            illust_raw, novel_raw, total, related_tags = \
+            (illust_raw, novel_raw, total, related_tags,
+             novel_total, tag_pixpedia) = \
                 await loop.run_in_executor(None, do_search)
         except Exception as e:
             write_log(f"search executor failed: {e}", 'error')
@@ -2986,11 +3175,14 @@ async def handle_command(bridge, cmd, ws):
 
         payload = {
             'type': 'search_result',
+            'mode': mode,
             'items': illust_items,
             'novel_items': novel_items,
             'start_page': start_page, 'pages': pages,
             'tag': tag, 'total': total,
+            'novel_total': novel_total,
             'related_tags': related_tags,
+            'tag_pixpedia': tag_pixpedia,
         }
         try:
             data = json.dumps(payload, ensure_ascii=False)
@@ -3013,37 +3205,27 @@ async def handle_command(bridge, cmd, ws):
             return
         write_log("search: sent", 'info')
 
-        illust_items = [format_item(it) for it in illust_raw]
-        for i, f in enumerate(illust_items):
-            f['_slim_illust'] = illust_raw[i]
-        novel_items = [format_novel(it) for it in novel_raw]
-        for i, f in enumerate(novel_items):
-            f['_slim_illust'] = novel_raw[i]
-
-        await ws.send_str(json.dumps({
-            'type': 'search_result',
-            'items': illust_items,
-            'novel_items': novel_items,
-            'start_page': start_page, 'pages': pages,
-            'tag': tag, 'total': total,
-            'related_tags': related_tags},
-            ensure_ascii=False))
         bridge.session.update_ui_state({
             'active_tab': 'search',
             'search': {
-                'tag': tag, 'mode': 'illust', 'sort': sort, 'target': target,
+                'tag': tag, 'mode': mode, 'sort': sort, 'target': target,
                 'page': start_page, 'pages': pages,
                 'duration': duration or '',
                 'start_date': start_date or '',
                 'end_date': end_date or '',
+                'lang': novel_lang,
+                'min_chars': min_chars,
+                'max_chars': max_chars,
                 'filters': filters,
-                'pane': 'illust',
+                'pane': mode if mode in ('illust', 'novel') else 'illust',
                 'illust_items': illust_items[:500],
                 'novel_items': novel_items[:500],
                 'header': {
                     'tag': tag,
                     'total': total,
+                    'novel_total': novel_total,
                     'related_tags': related_tags,
+                    'tag_pixpedia': tag_pixpedia,
                 },
                 'fetched_at': int(time.time() * 1000),
             },
@@ -3401,6 +3583,37 @@ async def handle_command(bridge, cmd, ws):
                 'fetched_at': int(time.time() * 1000),
             },
         })
+
+    elif c == 'illust_caption':
+        iid = str(cmd.get('id', '') or '').strip()
+        if not iid.isdigit():
+            await ws.send_str(json.dumps({
+                'type': 'illust_caption', 'id': iid,
+                'caption': '', 'caption_parts': []}))
+            return
+        loop = asyncio.get_event_loop()
+
+        def fetch_ajax_caption():
+            api = make_api(bridge)
+            if not (api.web_ajax and api.web_ajax.is_available()):
+                return ''
+            body = api.web_ajax.illust_detail(iid) or {}
+            return (body.get('illustComment')
+                    or body.get('description') or '')
+
+        try:
+            raw_caption = await loop.run_in_executor(
+                None, fetch_ajax_caption)
+        except Exception as e:
+            write_log(f"illust_caption: ajax failed: {e}", 'info')
+            raw_caption = ''
+        api = make_api(bridge)
+        caption = api._html_to_text(raw_caption) if raw_caption else ''
+        parts = api._html_to_parts(raw_caption) if raw_caption else []
+        await ws.send_str(json.dumps({
+            'type': 'illust_caption', 'id': iid,
+            'caption': caption, 'caption_parts': parts},
+            ensure_ascii=False))
 
     elif c == 'novel_detail':
         try:
@@ -3948,6 +4161,13 @@ async def handle_command(bridge, cmd, ws):
             bridge.config.set(k, v)
         bridge.config._resolve_auto_workers()
         bridge.config.save()
+        lang = bridge.config.get('preferences.language')
+        if lang in ('zh-CN', 'en'):
+            set_language(lang)
+            try:
+                bridge.worker.api.sync_language()
+            except Exception:
+                pass
         await ws.send_str(json.dumps(
             {'type': 'success', 'msg': 'Config saved'}))
         await ws.send_str(json.dumps(bridge._queue_status_payload()))

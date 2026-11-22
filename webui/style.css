@@ -290,6 +290,16 @@ main {
 }
 .search-header-wiki:hover .btn-icon { opacity: 1; }
 .search-header-total { color: var(--text-secondary); font-size: 13px; }
+.search-header-pixpedia {
+    width: 40px;
+    height: 40px;
+    object-fit: cover;
+    border-radius: 6px;
+    flex-shrink: 0;
+    cursor: pointer;
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+}
+.search-header-pixpedia:hover { opacity: 0.85; }
 .search-header-actions { display: flex; gap: 8px; margin-top: 4px; }
 .search-tag-toggle,
 .cloud-toggle-btn {

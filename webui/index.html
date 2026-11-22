@@ -188,6 +188,8 @@
         <section class="tab sticky-results" id="tab-search">
             <div class="panel search-header-card" id="search-header-card" style="display:none">
                 <h2 class="search-header-title">
+                    <img class="search-header-pixpedia" id="search-header-pixpedia" src="" alt=""
+                        title="" style="display:none" onclick="openSearchTagPixpedia()">
                     <span id="search-header-title-text"></span>
                     <div class="search-ext-wrap">
                         <button class="search-header-wiki" type="button" id="search-ext-btn"
@@ -617,7 +619,7 @@
                     <label data-i18n="search_date_to"></label>
                     <input type="date" id="search-end-date" style="flex:1">
                 </div>
-                <div class="row">
+                <div class="row" id="search-type-row">
                     <label class="label-wide" data-i18n="search_type"></label>
                     <label><input type="checkbox" id="search-type-illust" checked>
                         <span data-i18n="type_illust"></span></label>
@@ -628,13 +630,72 @@
                     <label><input type="checkbox" id="search-type-novel">
                         <span data-i18n="type_novel"></span></label>
                 </div>
-                <div class="row">
+                <div class="row" id="search-bookmark-row">
                     <label class="label-wide" data-i18n="search_bookmarks"></label>
                     <input type="number" id="search-bm-min" value="0" min="0" style="width:100px"
                         data-i18n-placeholder="search_bm_min_ph">
                     <span class="range-sep">~</span>
                     <input type="number" id="search-bm-max" value="0" min="0" style="width:100px"
                         data-i18n-placeholder="search_bm_max_ph">
+                </div>
+            </div>
+
+            <div id="search-settings-novel" style="display:none">
+                <div class="row">
+                    <label class="label-wide" data-i18n="search_sort"></label>
+                    <select id="nsearch-sort" style="flex:1">
+                        <option value="date_desc" data-i18n="sort_newest"></option>
+                        <option value="date_asc" data-i18n="sort_oldest"></option>
+                    </select>
+                </div>
+                <div class="row">
+                    <label class="label-wide" data-i18n="search_page"></label>
+                    <input type="number" id="nsearch-page" value="1" min="1" style="width:80px">
+                    <label data-i18n="search_pages"></label>
+                    <input type="number" id="nsearch-pages" value="1" min="1" max="200" style="width:80px">
+                </div>
+                <div class="row">
+                    <label class="label-wide" data-i18n="search_range"></label>
+                    <select id="nsearch-target" style="flex:1">
+                        <option value="partial_match_for_tags" data-i18n="search_target_partial"></option>
+                        <option value="exact_match_for_tags" selected data-i18n="search_target_exact"></option>
+                        <option value="title_and_caption" data-i18n="search_target_title_caption"></option>
+                    </select>
+                </div>
+                <div class="row">
+                    <label class="label-wide" data-i18n="search_duration"></label>
+                    <select id="nsearch-duration" onchange="onNovelDurationChange()" style="flex:1">
+                        <option value="" data-i18n="duration_any"></option>
+                        <option value="within_last_day" data-i18n="duration_day"></option>
+                        <option value="within_last_week" data-i18n="duration_week"></option>
+                        <option value="within_last_month" data-i18n="duration_month"></option>
+                        <option value="custom" data-i18n="duration_custom"></option>
+                    </select>
+                </div>
+                <div class="row" id="nsearch-custom-dates" style="display:none">
+                    <label class="label-wide" data-i18n="search_date_from"></label>
+                    <input type="date" id="nsearch-start-date" style="flex:1">
+                    <label data-i18n="search_date_to"></label>
+                    <input type="date" id="nsearch-end-date" style="flex:1">
+                </div>
+                <div class="row">
+                    <label class="label-wide" data-i18n="search_lang"></label>
+                    <select id="nsearch-lang" style="flex:1">
+                        <option value="all" data-i18n="search_lang_all"></option>
+                        <option value="zh" data-i18n="search_lang_zh"></option>
+                        <option value="zh-tw" data-i18n="search_lang_zh_tw"></option>
+                        <option value="ja" data-i18n="search_lang_ja"></option>
+                        <option value="en" data-i18n="search_lang_en"></option>
+                        <option value="ko" data-i18n="search_lang_ko"></option>
+                    </select>
+                </div>
+                <div class="row">
+                    <label class="label-wide" data-i18n="search_words"></label>
+                    <input type="number" id="nsearch-min-chars" value="0" min="0" style="width:100px"
+                        data-i18n-placeholder="search_words_min_ph">
+                    <span class="range-sep">~</span>
+                    <input type="number" id="nsearch-max-chars" value="0" min="0" style="width:100px"
+                        data-i18n-placeholder="search_words_max_ph">
                 </div>
             </div>
 

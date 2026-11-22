@@ -1,5 +1,31 @@
 # NagatoPix - Changelog
 
+## 1.3.3
+
+### Changes
+
+**搜索**
+
+- 小说独立搜索设置：检索范围、投稿时间（含自定义日期区间）、语言、字数区间，与插画设置互不影响
+- 小说列表以「字数」列展示（可排序），替代插画列表里的页数口径
+- 小说搜索优先走 Web Ajax `search/novels`，可取到语言、字数、AI 生成与 R-18 标记；不可用时回退 App API
+- 修复小说搜索携带投稿时间时报错的问题（App API 的 `search_novel` 不接受 `duration`，改为按日期区间换算）
+- 标签（完全一致）搜索顶端卡片左侧显示 Tag 头图（Ajax `search/tags/{tag}` 的 `pixpedia`），点击可打开对应作品
+- 清理搜索完成时重复构建并二次发送结果的冗余逻辑
+
+**作品简介**
+
+- 打开作品查看器时从 Web Ajax 拉取一次最新简介（`illustComment`），补齐列表数据中缺失的 caption
+
+**HTML 与元数据**
+
+- 实体解码统一改用标准库 `html.unescape`，修复链式替换导致的二次解码与未覆盖的命名 / 数字实体
+- `_html_to_text` 解析 `/jump.php` 跳转链接，下载元数据中的纯文本简介 / 评论不再残留跳转参数
+
+**语言**
+
+- 语言设置同步到 Pixiv API：登录与切换语言时调用 `AppPixivAPI.set_accept_language`，作品 / 小说标题与标签随界面语言返回
+
 ## 1.3.2
 
 ### Changes

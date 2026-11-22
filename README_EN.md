@@ -46,12 +46,12 @@ The core difference is not "more features" — it is **design philosophy**. The 
 
 - **Rankings**: 8 types, fixed 480 items, auto-compares today vs yesterday and flags new entries
 - **Tag search**: up to 6000 items (200 pages × 30)
-- **Search settings** (modal):
-  - Scope: tags (partial / exact) / title & caption
-  - Period: any / last day / last week / last month / **custom range**
-  - Type: illust / manga / ugoira / novel
-  - Bookmark count range (client-side filter)
+- **Search settings** (modal; separate for illust and novel):
+  - Illust: scope / period (including **custom range**) / type (illust, manga, ugoira) / bookmark range (client-side filter)
+  - Novel: scope / period (including **custom range**) / language / length range; the list shows length plus AI-generated and R-18 badges
 - **Top-bar search**: illust / novel / user modes, press `Enter` to search
+- **Tag thumbnail**: exact-tag searches show the tag's Pixpedia image on the header card; click to open the artwork
+- **Artwork caption**: opening the artwork viewer fetches the latest caption once from the Web Ajax API (`illustComment`)
 - **User detail**: illust / novel tabs, artwork list + profile + commission status + tag cloud
 - **Recommendations**: auto / from queue / from history / from artwork / advanced
 - **Followed artists' new works**: 300 per request, tag cloud + author cloud filter
@@ -192,11 +192,10 @@ Type a keyword in the top search bar, choose "Illust" or "Novel" mode, press `En
 - **Tag**: exact / partial / title & caption
 - **Sort**: newest / oldest
 - **Page + Pages**: auto-step forward N pages from start (up to 200 pages = 6000 items)
-- **Search settings** (gear button on the right of the search bar, opens a modal):
-  - Scope
-  - Period (including custom date range)
-  - Type (illust / manga / ugoira / novel)
-  - Bookmark count range (client-side)
+- **Search settings** (gear button on the right of the search bar, opens a modal; separate for illust and novel):
+  - Illust: scope / period (including custom date range) / type (illust / manga / ugoira / novel) / bookmark count range (client-side)
+  - Novel: scope / period (including custom date range) / language / length range
+- **Novel list**: shows length (sortable) plus AI-generated and R-18 badges; results come from the Web Ajax `search/novels` endpoint first, which exposes language and other fields the App API lacks
 
 ### User Search / User Detail
 
@@ -339,7 +338,7 @@ plugins/
 ## Known Limitations
 
 - **Invisible artworks**: some works are visible on the website but the API returns `visible: false`. This is a Pixiv API-level filter — cannot be bypassed.
-- **Novels**: browsing and search since 1.3.0, Markdown download since 1.3.1 (not written via ExifTool; metadata goes into YAML frontmatter)
+- **Novels**: browsing and search since 1.3.0, Markdown download since 1.3.1 (not written via ExifTool; metadata goes into YAML frontmatter), dedicated novel search settings (language / length) since 1.3.3
 - **"Popular" sort**: requires Pixiv Premium, removed.
 - **Rate limit**: non-Japan IPs hit rate limits more often. The program waits and retries automatically.
 - **ExifTool optional**: if ExifTool is missing, images still download but metadata is not written.
