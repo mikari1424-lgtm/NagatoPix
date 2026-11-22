@@ -3615,6 +3615,36 @@ async def handle_command(bridge, cmd, ws):
             'caption': caption, 'caption_parts': parts},
             ensure_ascii=False))
 
+    elif c == 'illust_detail':
+        iid = str(cmd.get('id', '') or '').strip()
+        if not iid.isdigit():
+            await ws.send_str(json.dumps(
+                {'type': 'error', 'msg': 'Invalid illust id'}))
+            return
+        loop = asyncio.get_event_loop()
+
+        def fetch_illust_detail():
+            api = make_api(bridge)
+            return api.get_illust_detail(int(iid))
+
+        try:
+            raw_illust = await loop.run_in_executor(
+                None, fetch_illust_detail)
+        except Exception as e:
+            write_log(f"illust_detail: failed: {e}", 'error')
+            await ws.send_str(json.dumps(
+                {'type': 'error', 'msg': f'Illust detail failed: {e}'}))
+            return
+        if not raw_illust:
+            await ws.send_str(json.dumps(
+                {'type': 'error', 'msg': 'Illust detail empty'}))
+            return
+        item = format_item(raw_illust)
+        item['_slim_illust'] = raw_illust
+        await ws.send_str(json.dumps(
+            {'type': 'illust_detail', 'id': iid, 'item': item},
+            ensure_ascii=False))
+
     elif c == 'novel_detail':
         try:
             nid = int(cmd.get('id'))

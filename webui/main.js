@@ -79,6 +79,7 @@ let ivState = {
     pages: [],
     pageIdx: 0,
 };
+let ivPendingIllustId = "";
 
 let nvState = {
     novel: null,
@@ -332,6 +333,16 @@ function handleMessage(msg) {
         case "illust_caption":
             if (ivCaptionId && String(msg.id) === String(ivCaptionId)) {
                 applyIllustCaption(msg.caption, msg.caption_parts);
+            }
+            break;
+        case "illust_detail":
+            if (
+                ivPendingIllustId &&
+                String(msg.id) === String(ivPendingIllustId) &&
+                msg.item
+            ) {
+                ivPendingIllustId = "";
+                openIllustViewerItems([msg.item], 0, "search-list-illust");
             }
             break;
         case "search_progress":
@@ -907,7 +918,6 @@ const TABLE_COLUMNS = {
         { key: "title", get: "th_title", numeric: false },
         { key: "text_length", get: "th_words", numeric: true },
         { key: "author", get: "th_author", numeric: false },
-        { key: "views", get: "th_views", numeric: true },
         { key: "bookmarks", get: "th_bookmarks", numeric: true },
         { key: "tags", get: "th_tags", numeric: false },
         { key: "date", get: "th_date", numeric: false },
@@ -1626,27 +1636,25 @@ function openSearchTagPixpedia() {
     const img = document.getElementById("search-header-pixpedia");
     const id = img?.dataset.pixpediaId;
     if (!id) return;
-    const idx = searchIllustItems.findIndex(
-        (it) => String(it.id) === String(id),
-    );
-    if (idx >= 0) {
-        switchSearchPane("illust");
-        openIllustViewer("search-list-illust", idx);
-        return;
-    }
-    const nIdx = searchNovelItems.findIndex(
-        (it) => String(it.id) === String(id),
-    );
-    if (nIdx >= 0) {
-        switchSearchPane("novel");
-        openNovelViewer(id);
-        return;
-    }
-    window.open(
-        `https://www.pixiv.net/artworks/${encodeURIComponent(id)}`,
-        "_blank",
-        "noopener",
-    );
+    openIllustViewerById(id);
+}
+
+// 按作品 ID 打开查看器：先向后端取详情，回包后以「只含该作品」的列表打开
+function openIllustViewerById(id) {
+    if (!id) return;
+    ivPendingIllustId = String(id);
+    send({ cmd: "illust_detail", id: ivPendingIllustId });
+}
+
+function openIllustViewerItems(items, idx, containerId) {
+    const it = items?.[idx];
+    if (!it) return;
+    ivState.containerId = containerId || ivState.containerId;
+    ivState.items = items;
+    ivState.idx = idx;
+
+    renderIllustViewer();
+    document.getElementById("illust-viewer-modal").classList.add("show");
 }
 
 function updateSearchHeaderTotal() {
@@ -2694,16 +2702,7 @@ function getIllustPages(slim) {
 function openIllustViewer(containerId, idx) {
     const getter = tableItemGetters[containerId];
     if (!getter) return;
-    const items = getter();
-    const it = items[idx];
-    if (!it) return;
-
-    ivState.containerId = containerId;
-    ivState.items = items;
-    ivState.idx = idx;
-
-    renderIllustViewer();
-    document.getElementById("illust-viewer-modal").classList.add("show");
+    openIllustViewerItems(getter(), idx, containerId);
 }
 
 function closeIllustViewer() {
