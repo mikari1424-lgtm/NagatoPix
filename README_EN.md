@@ -46,13 +46,13 @@ The core difference is not "more features" — it is **design philosophy**. The 
 
 - **Rankings**: 8 types, fixed 480 items, auto-compares today vs yesterday and flags new entries
 - **Tag search**: up to 6000 items (200 pages × 30)
-- **Search settings** (collapsible):
+- **Search settings** (modal):
   - Scope: tags (partial / exact) / title & caption
   - Period: any / last day / last week / last month / **custom range**
-  - Type: illust / manga (ugoira excluded)
+  - Type: illust / manga / ugoira / novel
   - Bookmark count range (client-side filter)
-- **Merged search**: artwork and user search via dropdown
-- **User detail**: artwork list + profile + commission status
+- **Top-bar search**: illust / novel / user modes, press `Enter` to search
+- **User detail**: illust / novel tabs, artwork list + profile + commission status + tag cloud
 - **Recommendations**: auto / from queue / from history / from artwork / advanced
 - **Followed artists' new works**: 300 per request, tag cloud + author cloud filter
 - **Tag cloud / Author cloud**: collapsible, auto-generated from fetched results
@@ -61,7 +61,7 @@ The core difference is not "more features" — it is **design philosophy**. The 
 
 - **Parallel queue**: 1–8 workers (high-speed mode), per-artwork granularity
 - **Global rate-limit sync**: any worker hitting a rate limit pauses all workers
-- **Queue persistence**: real-time save after each task; resume from `queue.json`
+- **Queue persistence**: real-time save after each task; resume from `session.json`
 - **Auto-start**: if saved tasks exist at startup, the queue starts automatically
 - **Failure retry**: uses `-m` to ignore minor errors and exports JSON metadata
 - **History**: last 2000 downloads archived to `history.json`
@@ -84,8 +84,9 @@ The core difference is not "more features" — it is **design philosophy**. The 
 - **Direct author links**: click author → opens user detail page
 - **Multi-select**: Ctrl/Shift select then add to queue
 - **Sticky controls + scrollable results**: filters stay put
-- **Multi-language UI**: Simplified Chinese / English toggle
+- **Multi-language UI**: Simplified Chinese / English, switchable in Settings and persisted
 - **Latency probe**: measures Cloudflare RTT on startup
+- **HashLink routing**: page state is written into the URL; refresh / back-forward restores the current tab and search parameters
 
 ---
 
@@ -106,7 +107,7 @@ The core difference is not "more features" — it is **design philosophy**. The 
 git clone https://github.com/mikari1424-lgtm/NagatoPix.git
 cd NagatoPix
 pip install -r requirements.txt
-python pixiv_server.py
+python main.py
 ```
 
 ---
@@ -152,10 +153,11 @@ Download from [GitHub](https://github.com/Notsfsssf/pixez-flutter), then: More �
 | ✨ | Recommendations |
 | 👥 | Followed artists |
 | 🏆 | Rankings |
-| 🔍 | Tag / User search |
-| 📋 | User detail |
 | ⬇️ | Download queue |
+| 👤 | Account & bookmarks |
 | ⚙️ | Settings |
+
+> Tag/user search is entered from the top search bar; the user detail page is reached from user search results or author links and has no dedicated sidebar entry.
 
 ### Recommendations
 
@@ -184,24 +186,25 @@ The program auto-compares today's and yesterday's rankings; **new entries show a
 
 ### Tag Search
 
-Select "Artwork" in the search dropdown:
+Type a keyword in the top search bar, choose "Illust" or "Novel" mode, press `Enter`:
 
+- **Modes**: illust / novel / user (dropdown in the top bar)
 - **Tag**: exact / partial / title & caption
 - **Sort**: newest / oldest
 - **Page + Pages**: auto-step forward N pages from start (up to 200 pages = 6000 items)
-- **Search settings** (click to expand):
+- **Search settings** (gear button on the right of the search bar, opens a modal):
   - Scope
   - Period (including custom date range)
-  - Type (illust / manga; ugoira excluded)
+  - Type (illust / manga / ugoira / novel)
   - Bookmark count range (client-side)
 
 ### User Search / User Detail
 
-Select "User" in the search dropdown:
+Switch the top search bar mode to "User":
 
 - Search by username / account
 - Click name → user detail
-- User detail auto-loads all artworks with tag cloud filter
+- User detail auto-loads all artworks with illust / novel tabs and a tag cloud filter
 
 ### Download Queue
 
@@ -213,12 +216,13 @@ In any result list:
 
 Switch to the "Download" tab:
 
-- **Progress bar**: processed / total
-- **Stats panel**: pending, processed, failed, workers, status
+- **Progress summary**: percentage + remaining count + progress bar + failed count + status
+- **Item list**: PID, title, status and progress per item (collapsible)
 - **Preset toggle**:
   - "Normal": single-threaded, stable
   - "High-speed": 1–8 parallel workers
-- **Actions**: retry failed, clear queue, stop
+- **Ugoira format**: GIF / APNG / WebP
+- **Actions**: clear queue, stop
 
 **`+` button bottom-right**: opens the "Add Task" modal:
 
@@ -227,10 +231,15 @@ Switch to the "Download" tab:
 
 ### Settings
 
-- **Account**: RefreshToken (with ❓ built-in guide)
-- **UI language**: auto / 简体中文 / English
-- **Download directory**, **proxy**, **download delay**, **API delay**
-- **Max retries**, **rate-limit wait time**, **default result count**
+The Settings tab is split into four sections (matching `[download]` / `[api]` / `[preferences]` / `[network]` in `config.toml`):
+
+- **Download**: directory, normal/high-speed mode, worker count, download delay, max retries, metadata cache, overwrite existing files, ugoira export format (GIF / APNG / WebP)
+- **API**: request delay, parallel requests, default result count, Web Ajax mode (auto / disabled)
+- **Preferences**: UI language (auto / 简体中文 / English), theme (dark / light)
+- **Network**: proxy (socks5 / socks4 / http), start port
+- Buttons: Save, Test login, Test latency
+
+Account management (RefreshToken / multi-account switching) lives in the "Account" tab with a built-in ❓ guide.
 
 ---
 
@@ -245,7 +254,7 @@ Switch to the "Download" tab:
              │ WebSocket (/ws)
              │ HTTP (/proxy_image)
 ┌────────────▼─────────────────────────────┐
-│  aiohttp server (pixiv_server.py)        │
+│  aiohttp server (main.py)                 │
 │  ├─ WebBridge (WebSocket broadcast)      │
 │  ├─ DownloadWorker (1–8 parallel)        │
 │  │   ├─ PixivAPI (pixivpy3 wrapper)      │
@@ -261,9 +270,11 @@ Switch to the "Download" tab:
 | --- | --- |
 | `RateLimiter` | When any worker hits a rate limit, all workers wait via `threading.Condition` |
 | `WebBridge` | Backend status → broadcast to all WebSocket clients |
+| `WebAjaxClient` | Web Ajax API channel: captions / profiles / novels / translated tags / totals |
 | `DownloadWorker` | Queue consumption, failure tracking, real-time persistence |
 | `ExifToolWrapper` | Each call uses an independent temp arg-file; CStr mode preserves newlines |
-| `proxy_image` | Forwards Pixiv CDN images, bypassing Referer protection |
+| `SessionManager` | Session / queue / UI state persisted together in `session.json` |
+| `proxy_image` | Streams Pixiv CDN images through an aiohttp session (bypasses Referer, passes cache headers) |
 
 ### Files
 
@@ -271,7 +282,8 @@ Switch to the "Download" tab:
 NagatoPix/
 ├── NagatoPix.exe
 ├── config.toml                # config (auto-created on first run)
-├── queue.json                 # queue (real-time save)
+├── session.json               # session / queue / UI state (real-time save)
+├── accounts.json              # accounts (RefreshToken)
 ├── history.json               # download history (last 2000)
 ├── logs/
 │   └── nagato-YYYYMMDD-HHMMSS.log
@@ -295,18 +307,21 @@ pip install -r requirements.txt
 `requirements.txt`:
 
 ```text
-aiohttp
-pixivpy3
 requests
+aiohttp
 beautifulsoup4
+Pillow
+pixivpy3>=3.7.5
 tomli; python_version < "3.11"
 ```
+
+Python 3.11+ is required (`tomllib` is stdlib); on Python 3.10 `tomli` is installed automatically as a fallback.
 
 ### Packaging as standalone executable
 
 ```bash
 pip install pyinstaller
-pyinstaller NagatoPix.spec --noconfirm
+pyinstaller app.spec --noconfirm
 ```
 
 Output: `dist/NagatoPix/`. Compress the whole directory to distribute.
@@ -324,7 +339,7 @@ plugins/
 ## Known Limitations
 
 - **Invisible artworks**: some works are visible on the website but the API returns `visible: false`. This is a Pixiv API-level filter — cannot be bypassed.
-- **Novels**: removed in this version.
+- **Novels**: browsing and search since 1.3.0, Markdown download since 1.3.1 (not written via ExifTool; metadata goes into YAML frontmatter)
 - **"Popular" sort**: requires Pixiv Premium, removed.
 - **Rate limit**: non-Japan IPs hit rate limits more often. The program waits and retries automatically.
 - **ExifTool optional**: if ExifTool is missing, images still download but metadata is not written.
@@ -334,7 +349,7 @@ plugins/
 ## FAQ
 
 **Q: Port in use?**
-A: The program automatically finds a free port in 8765–8864.
+A: The program starts from the configured start port (default 8765) and scans forward for a free one.
 
 **Q: Blank browser page?**
 A: Check the console for errors, or visit `http://127.0.0.1:<port>/` manually.
@@ -352,7 +367,7 @@ A: Delete `history.json`.
 A: The code is cross-platform, but you must replace ExifTool with the platform-specific binary and adjust the filename in `plugins/`.
 
 **Q: How to switch language?**
-A: The language dropdown is in the sidebar bottom, or in Settings. The choice persists.
+A: Go to Settings → Preferences and pick the UI language. The choice persists.
 
 ---
 

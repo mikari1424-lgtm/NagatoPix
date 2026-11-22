@@ -1,5 +1,56 @@
 # NagatoPix - Changelog
 
+## 1.3.2
+
+### Changes
+
+**配置系统**
+
+- 四段式配置：`[download]` / `[api]` / `[preferences]` / `[network]`，`ConfigManager` 重写
+- 新增配置项：`parallel_requests`、`metadata_cache`、`overwrite_existing`、`ugoira_format`、`web_ajax_mode`、`port_start`
+- 设置页按四组分区重排，配置读写统一走点号路径（如 `config.get("download.dir")`）
+
+**会话与账号**
+
+- `SessionManager` 统一持久化会话 / 队列 / `ui_state` 到 `session.json`（原 `queue.json` 迁移）
+- 多账号管理独立到 `accounts.json`，支持添加 / 切换 / 删除账号
+- 前端切页从后端拉取 `ui_state`，避免刷新丢失状态
+
+**网络性能**
+
+- `/proxy_image` 改用 aiohttp 全局会话流式转发，透传缓存头，列表加载实测 6–8× 提速
+- API 请求并行化：`parallel_requests` 控制搜索 / 用户作品的并发拉取
+
+**路由与界面**
+
+- HashLink 路由：标签页与搜索参数写入 URL hash，刷新 / 前进后退可恢复
+- 顶栏搜索框：插画 / 小说 / 用户三模式，`Enter` 直接搜索
+- 用户详情插画 / 小说双标签，作品列表与小说列表分开
+- 作品查看器、小说查看器、小说系列索引模态框
+- 移除侧栏搜索入口、语言选择与连接状态（分别迁到顶栏与设置页）
+
+**双通道 API**
+
+- `get_user_detail` 合并 App API 与 Ajax 数据
+- `get_user_bookmarks` 支持 `max_bookmark_id` 分页
+- 动图 / 小说元数据补齐，搜索补充 `illustManga.total` 与 `relatedTags`
+- 新增 `docs/pixivpy3.md`（898 行）AppPixivAPI 使用说明
+
+**清理**
+
+- 移除重复函数、无引用的旧调用与调试代码
+
+## 1.3.1
+
+### Changes
+
+- **外部搜索扩展**：除萌娘百科外，新增维基百科 / 百度 / Bing / Google 四个站点
+- **小说下载支持**：小说查看器内可直接加入下载队列
+- **模态框更新**：作品查看器、添加任务等模态框的显示与交互调整
+- **超时机制**：请求超时与重试逻辑更新
+- **下载悬浮球**：适配新版搜索界面
+- 版本号刷新
+
 ## 1.3.0
 
 ### Changes

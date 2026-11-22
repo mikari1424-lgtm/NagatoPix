@@ -37,7 +37,10 @@ from bs4 import BeautifulSoup
 from PIL import Image
 from pixivpy3 import AppPixivAPI
 
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python < 3.11
+    import tomli as tomllib
 
 from i18n import t, meta, set_language
 

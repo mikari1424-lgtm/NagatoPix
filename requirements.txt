@@ -1,0 +1,6 @@
+requests
+aiohttp
+beautifulsoup4
+Pillow
+pixivpy3>=3.7.5
+tomli; python_version < "3.11"

@@ -5,10 +5,13 @@
 !.gitignore
 !CHANGELOG.md
 !README.md
-!README.EN.md
+!README_EN.md
 !DISCLAIMER.md
 !LICENSE
 !main.py
+!i18n.py
+!app.spec
+!requirements.txt
 !webui/
 !webui/**
 !AppLogos/

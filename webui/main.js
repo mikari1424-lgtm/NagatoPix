@@ -1333,18 +1333,6 @@ function onRouteSearch(params) {
     doSearch();
 }
 
-function onSearchModeChange() {
-    const mode = document.getElementById("search-mode").value;
-    setEl(
-        "search-pane-illust",
-        (el) => (el.style.display = mode === "illust" ? "" : "none"),
-    );
-    setEl(
-        "search-pane-user",
-        (el) => (el.style.display = mode === "user" ? "" : "none"),
-    );
-}
-
 function onDurationChange() {
     const v = document.getElementById("search-duration").value;
     setEl(
